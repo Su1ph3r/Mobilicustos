@@ -356,24 +356,126 @@ class CryptoAuditor(BaseAnalyzer):
             for k in keys[:10]
         ])
 
+        poc_cmds = [
+            {
+                "type": "bash",
+                "command": "jadx -d decompiled app.apk" if app.platform == "android" else "class-dump -H -o headers binary",
+                "description": "Decompile application to extract source",
+            },
+            {
+                "type": "bash",
+                "command": "grep -rn 'key\\|secret\\|password\\|AES\\|DES' decompiled/",
+                "description": "Search for hardcoded key material",
+            },
+            {
+                "type": "bash",
+                "command": "strings app.apk | grep -E '[A-Za-z0-9+/]{32,}' | head -20" if app.platform == "android" else "strings binary | grep -E '[A-Za-z0-9+/]{32,}'",
+                "description": "Extract potential Base64-encoded keys",
+            },
+        ]
+
+        frida_script = f'''// Hook crypto key initialization to extract keys
+Java.perform(function() {{
+    // Hook SecretKeySpec constructor
+    var SecretKeySpec = Java.use('javax.crypto.spec.SecretKeySpec');
+    SecretKeySpec.$init.overload('[B', 'java.lang.String').implementation = function(key, algo) {{
+        console.log("[*] SecretKeySpec created");
+        console.log("    Algorithm: " + algo);
+        console.log("    Key (hex): " + bytesToHex(key));
+        return this.$init(key, algo);
+    }};
+
+    function bytesToHex(bytes) {{
+        var hex = [];
+        for (var i = 0; i < bytes.length; i++) {{
+            hex.push(('0' + (bytes[i] & 0xFF).toString(16)).slice(-2));
+        }}
+        return hex.join('');
+    }}
+}});
+''' if app.platform == "android" else '''// Hook CommonCrypto key operations
+Interceptor.attach(Module.findExportByName(null, 'CCCrypt'), {{
+    onEnter: function(args) {{
+        console.log("[*] CCCrypt called");
+        console.log("    Key length: " + args[4]);
+        console.log("    Key: " + hexdump(args[3], {{ length: args[4].toInt32() }}));
+    }}
+}});
+'''
+
         return AnalyzerResult(
             title=f"Hardcoded Cryptographic Keys Detected ({len(keys)} instances)",
             description=f"Cryptographic keys appear to be hardcoded in the source code:\n\n{locations}",
             severity="critical",
             category="Cryptography",
-            impact="Hardcoded keys can be extracted through reverse engineering, compromising all data encrypted with these keys.",
+            impact="Hardcoded keys can be extracted through reverse engineering, compromising all data encrypted with these keys. Attackers can decrypt sensitive data, forge signatures, or impersonate the application.",
             remediation="1. Store keys in secure storage (Android KeyStore, iOS Keychain)\n2. Use key derivation from user credentials\n3. Fetch keys from secure backend\n4. Implement proper key rotation",
             file_path=keys[0]["file"],
             line_number=keys[0]["line"],
             code_snippet=keys[0]["snippet"],
             cwe_id="CWE-321",
             cwe_name="Use of Hard-coded Cryptographic Key",
+            cvss_score=9.1,
+            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
             owasp_masvs_category="MASVS-CRYPTO",
             owasp_masvs_control="MSTG-CRYPTO-1",
-            poc_verification="1. Decompile the application\n2. Search for key-related strings\n3. Extract and verify the key",
-            poc_commands=[
-                "jadx -d output app.apk" if app.platform == "android" else "otool -l binary",
-                f"grep -rn 'key\\|secret\\|password' .",
+            owasp_mastg_test="MASTG-TEST-0013",
+            poc_verification="jadx -d decompiled app.apk && grep -rn 'SecretKeySpec\\|key =' decompiled/",
+            poc_commands=poc_cmds,
+            poc_frida_script=frida_script,
+            remediation_commands=[
+                {
+                    "type": "android",
+                    "command": "KeyGenerator keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, \"AndroidKeyStore\");",
+                    "description": "Generate key in Android KeyStore instead of hardcoding",
+                },
+            ] if app.platform == "android" else [
+                {
+                    "type": "ios",
+                    "command": "SecKeyCreateRandomKey(attributes, &error)",
+                    "description": "Generate key in Secure Enclave instead of hardcoding",
+                },
+            ],
+            remediation_code={
+                "kotlin": '''// Use Android KeyStore
+val keyGenerator = KeyGenerator.getInstance(
+    KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore"
+)
+keyGenerator.init(
+    KeyGenParameterSpec.Builder("my_key",
+        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+        .build()
+)
+val secretKey = keyGenerator.generateKey()''',
+                "swift": '''// Use iOS Keychain
+let attributes: [String: Any] = [
+    kSecAttrKeyType as String: kSecAttrKeyTypeAES,
+    kSecAttrKeySizeInBits as String: 256,
+    kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave
+]
+var error: Unmanaged<CFError>?
+guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+    throw error!.takeRetainedValue() as Error
+}''',
+            },
+            remediation_resources=[
+                {
+                    "title": "OWASP MASTG - Testing for Hardcoded Cryptographic Keys",
+                    "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0013/",
+                    "type": "documentation",
+                },
+                {
+                    "title": "Android KeyStore System",
+                    "url": "https://developer.android.com/training/articles/keystore",
+                    "type": "documentation",
+                },
+                {
+                    "title": "Apple - Storing Keys in the Keychain",
+                    "url": "https://developer.apple.com/documentation/security/certificate_key_and_trust_services/keys/storing_keys_in_the_keychain",
+                    "type": "documentation",
+                },
             ],
             metadata={
                 "instances": len(keys),
@@ -388,19 +490,107 @@ class CryptoAuditor(BaseAnalyzer):
             for i in instances[:10]
         ])
 
+        frida_script = '''// Hook insecure random calls to demonstrate predictability
+Java.perform(function() {
+    var Random = Java.use('java.util.Random');
+    Random.nextInt.overload().implementation = function() {
+        var result = this.nextInt();
+        console.log("[!] java.util.Random.nextInt() called - INSECURE");
+        console.log("    Result: " + result);
+        console.log("    Stack: " + Java.use("android.util.Log").getStackTraceString(
+            Java.use("java.lang.Exception").$new()));
+        return result;
+    };
+
+    var SecureRandom = Java.use('java.security.SecureRandom');
+    SecureRandom.nextInt.overload().implementation = function() {
+        var result = this.nextInt();
+        console.log("[+] SecureRandom.nextInt() called - SECURE");
+        return result;
+    };
+});
+''' if app.platform == "android" else '''// Hook random functions on iOS
+Interceptor.attach(Module.findExportByName(null, 'arc4random'), {
+    onLeave: function(retval) {
+        console.log("[+] arc4random() = " + retval + " (secure)");
+    }
+});
+Interceptor.attach(Module.findExportByName(null, 'rand'), {
+    onLeave: function(retval) {
+        console.log("[!] rand() = " + retval + " (INSECURE!)");
+    }
+});
+'''
+
         return AnalyzerResult(
             title=f"Insecure Random Number Generator ({len(instances)} instances)",
-            description=f"The application uses predictable random number generators:\n\n{locations}",
+            description=f"The application uses predictable random number generators:\n\n{locations}\n\nThese generators are not cryptographically secure and produce predictable sequences.",
             severity="high",
             category="Cryptography",
-            impact="Predictable random values used for security purposes (keys, tokens, nonces) can be guessed by attackers.",
+            impact="Predictable random values used for security purposes (keys, tokens, nonces) can be guessed by attackers. This can lead to session hijacking, token prediction, or weak encryption.",
             remediation="Use cryptographically secure random generators:\n- Android: SecureRandom\n- iOS: SecRandomCopyBytes\n- General: crypto.getRandomValues() in JS",
             file_path=instances[0]["file"],
             line_number=instances[0]["line"],
             cwe_id="CWE-330",
             cwe_name="Use of Insufficiently Random Values",
+            cvss_score=7.5,
+            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             owasp_masvs_category="MASVS-CRYPTO",
             owasp_masvs_control="MSTG-CRYPTO-6",
+            owasp_mastg_test="MASTG-TEST-0016",
+            poc_verification="grep -rn 'java.util.Random\\|Math.random' decompiled/",
+            poc_commands=[
+                {
+                    "type": "bash",
+                    "command": "grep -rn 'Random()\\|Math.random\\|rand()' decompiled/",
+                    "description": "Search for insecure random usage in decompiled source",
+                },
+                {
+                    "type": "frida",
+                    "command": f"frida -U -f {app.package_name} -l random_hook.js",
+                    "description": "Hook random functions to observe usage at runtime",
+                },
+            ],
+            poc_frida_script=frida_script,
+            remediation_commands=[
+                {
+                    "type": "android",
+                    "command": "SecureRandom random = new SecureRandom();",
+                    "description": "Replace java.util.Random with SecureRandom",
+                },
+            ] if app.platform == "android" else [
+                {
+                    "type": "ios",
+                    "command": "SecRandomCopyBytes(kSecRandomDefault, count, &bytes)",
+                    "description": "Use SecRandomCopyBytes for cryptographic random",
+                },
+            ],
+            remediation_code={
+                "kotlin": '''// Use SecureRandom for cryptographic operations
+val secureRandom = SecureRandom()
+val randomBytes = ByteArray(32)
+secureRandom.nextBytes(randomBytes)''',
+                "java": '''// Use SecureRandom for cryptographic operations
+SecureRandom secureRandom = new SecureRandom();
+byte[] randomBytes = new byte[32];
+secureRandom.nextBytes(randomBytes);''',
+                "swift": '''// Use SecRandomCopyBytes
+var bytes = [UInt8](repeating: 0, count: 32)
+let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+guard status == errSecSuccess else { throw CryptoError.randomGenerationFailed }''',
+            },
+            remediation_resources=[
+                {
+                    "title": "OWASP MASTG - Testing Random Number Generation",
+                    "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0016/",
+                    "type": "documentation",
+                },
+                {
+                    "title": "Android SecureRandom Documentation",
+                    "url": "https://developer.android.com/reference/java/security/SecureRandom",
+                    "type": "documentation",
+                },
+            ],
             metadata={
                 "instances": len(instances),
             }
@@ -413,20 +603,127 @@ class CryptoAuditor(BaseAnalyzer):
             for i in issues[:10]
         ])
 
+        frida_script = '''// Monitor IV/Nonce usage in encryption operations
+Java.perform(function() {
+    var IvParameterSpec = Java.use('javax.crypto.spec.IvParameterSpec');
+    IvParameterSpec.$init.overload('[B').implementation = function(iv) {
+        console.log("[*] IvParameterSpec created");
+        console.log("    IV (hex): " + bytesToHex(iv));
+        console.log("    IV length: " + iv.length + " bytes");
+
+        // Check for zeros (uninitialized)
+        var allZeros = true;
+        for (var i = 0; i < iv.length; i++) {
+            if (iv[i] !== 0) { allZeros = false; break; }
+        }
+        if (allZeros) {
+            console.log("    [!] WARNING: IV is all zeros!");
+        }
+
+        return this.$init(iv);
+    };
+
+    var GCMParameterSpec = Java.use('javax.crypto.spec.GCMParameterSpec');
+    GCMParameterSpec.$init.overload('int', '[B').implementation = function(tagLen, nonce) {
+        console.log("[*] GCMParameterSpec created");
+        console.log("    Nonce (hex): " + bytesToHex(nonce));
+        console.log("    Tag length: " + tagLen + " bits");
+        return this.$init(tagLen, nonce);
+    };
+
+    function bytesToHex(bytes) {
+        var hex = [];
+        for (var i = 0; i < bytes.length; i++) {
+            hex.push(('0' + (bytes[i] & 0xFF).toString(16)).slice(-2));
+        }
+        return hex.join('');
+    }
+});
+''' if app.platform == "android" else '''// Monitor IV usage in CommonCrypto
+Interceptor.attach(Module.findExportByName(null, 'CCCrypt'), {
+    onEnter: function(args) {
+        var ivPtr = args[5];
+        if (!ivPtr.isNull()) {
+            console.log("[*] CCCrypt IV:");
+            console.log(hexdump(ivPtr, { length: 16 }));
+        }
+    }
+});
+'''
+
         return AnalyzerResult(
             title=f"Potential IV/Nonce Issues ({len(issues)} instances)",
             description=f"Potential issues with initialization vectors (IV) or nonces detected:\n\n{locations}\n\nStatic or predictable IVs compromise the security of encryption.",
             severity="high",
             category="Cryptography",
-            impact="Reusing IVs or using predictable IVs can lead to plaintext recovery attacks, especially with stream ciphers and CTR mode.",
+            impact="Reusing IVs or using predictable IVs can lead to plaintext recovery attacks, especially with stream ciphers and CTR mode. With GCM mode, nonce reuse completely breaks the authentication and can reveal the key.",
             remediation="1. Generate fresh random IV for each encryption operation\n2. Use SecureRandom for IV generation\n3. For GCM mode, never reuse nonce with same key\n4. Store IV with ciphertext (IV is not secret)",
             file_path=issues[0]["file"],
             line_number=issues[0]["line"],
             code_snippet=issues[0]["snippet"],
             cwe_id="CWE-329",
             cwe_name="Generation of Predictable IV with CBC Mode",
+            cvss_score=7.5,
+            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             owasp_masvs_category="MASVS-CRYPTO",
             owasp_masvs_control="MSTG-CRYPTO-6",
+            owasp_mastg_test="MASTG-TEST-0014",
+            poc_verification="grep -rn 'IvParameterSpec\\|new byte\\[16\\]' decompiled/",
+            poc_commands=[
+                {
+                    "type": "bash",
+                    "command": "grep -rn 'IvParameterSpec\\|GCMParameterSpec' decompiled/",
+                    "description": "Search for IV initialization in decompiled code",
+                },
+                {
+                    "type": "frida",
+                    "command": f"frida -U -f {app.package_name} -l iv_hook.js",
+                    "description": "Hook IV creation to check for reuse/predictability",
+                },
+            ],
+            poc_frida_script=frida_script,
+            remediation_commands=[
+                {
+                    "type": "android",
+                    "command": "SecureRandom random = new SecureRandom(); byte[] iv = new byte[12]; random.nextBytes(iv);",
+                    "description": "Generate random IV using SecureRandom",
+                },
+            ],
+            remediation_code={
+                "kotlin": '''// Proper IV generation for GCM
+val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+val secureRandom = SecureRandom()
+val nonce = ByteArray(12)  // 12 bytes for GCM nonce
+secureRandom.nextBytes(nonce)
+
+val gcmSpec = GCMParameterSpec(128, nonce)  // 128-bit tag
+cipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+
+// Store nonce with ciphertext
+val ciphertext = cipher.doFinal(plaintext)
+val combined = nonce + ciphertext  // Prepend nonce''',
+                "swift": '''// Proper IV generation for AES-GCM
+var nonce = [UInt8](repeating: 0, count: 12)
+let status = SecRandomCopyBytes(kSecRandomDefault, nonce.count, &nonce)
+
+let sealedBox = try AES.GCM.seal(
+    plaintext,
+    using: key,
+    nonce: AES.GCM.Nonce(data: nonce)
+)''',
+            },
+            remediation_resources=[
+                {
+                    "title": "OWASP MASTG - Testing for Weak IVs",
+                    "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0014/",
+                    "type": "documentation",
+                },
+                {
+                    "title": "NIST SP 800-38D - GCM Mode",
+                    "url": "https://csrc.nist.gov/publications/detail/sp/800-38d/final",
+                    "type": "documentation",
+                },
+            ],
             metadata={
                 "instances": len(issues),
             }

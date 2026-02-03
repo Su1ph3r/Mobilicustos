@@ -307,6 +307,120 @@ class SecretScanner(BaseAnalyzer):
     ) -> Finding:
         """Create a finding from a detected secret."""
         provider_info = f" ({secret['provider']})" if secret["provider"] else ""
+        provider = secret.get("provider", "unknown")
+
+        # Build verification commands based on provider
+        poc_cmds = [
+            {
+                "type": "bash",
+                "command": f"jadx -d decompiled {app.file_path}" if app.platform == "android" else f"otool -l {app.file_path}",
+                "description": "Decompile the application binary",
+            },
+            {
+                "type": "bash",
+                "command": f"grep -rn '{secret['value_redacted'][:8]}' decompiled/",
+                "description": "Search for the secret in decompiled source",
+            },
+        ]
+
+        # Add provider-specific validation commands
+        if provider == "aws":
+            poc_cmds.append({
+                "type": "bash",
+                "command": "aws sts get-caller-identity",
+                "description": "Test if AWS credentials are valid (requires credentials export)",
+            })
+        elif provider == "google":
+            poc_cmds.append({
+                "type": "bash",
+                "command": f"curl 'https://maps.googleapis.com/maps/api/staticmap?center=0,0&zoom=1&size=1x1&key=<EXTRACTED_KEY>'",
+                "description": "Test if Google API key is valid",
+            })
+        elif provider == "stripe":
+            poc_cmds.append({
+                "type": "bash",
+                "command": "curl https://api.stripe.com/v1/customers -u '<EXTRACTED_KEY>:'",
+                "description": "Test if Stripe key is valid",
+            })
+        elif provider == "firebase":
+            poc_cmds.append({
+                "type": "bash",
+                "command": "curl '<EXTRACTED_URL>/.json'",
+                "description": "Test if Firebase database is accessible",
+            })
+
+        # Build remediation resources based on provider
+        remediation_resources = [
+            {
+                "title": "OWASP MASTG - Testing for Sensitive Data in Local Storage",
+                "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0001/",
+                "type": "documentation",
+            },
+        ]
+
+        if provider == "aws":
+            remediation_resources.extend([
+                {
+                    "title": "AWS Secrets Manager",
+                    "url": "https://aws.amazon.com/secrets-manager/",
+                    "type": "documentation",
+                },
+                {
+                    "title": "AWS Mobile SDK - Cognito for Authentication",
+                    "url": "https://docs.aws.amazon.com/cognito/latest/developerguide/what-is-amazon-cognito.html",
+                    "type": "documentation",
+                },
+            ])
+        elif provider == "google":
+            remediation_resources.append({
+                "title": "Google Cloud - API Key Best Practices",
+                "url": "https://cloud.google.com/docs/authentication/api-keys",
+                "type": "documentation",
+            })
+        elif provider == "firebase":
+            remediation_resources.append({
+                "title": "Firebase Security Rules",
+                "url": "https://firebase.google.com/docs/rules",
+                "type": "documentation",
+            })
+
+        # Add platform-specific storage resources
+        if app.platform == "android":
+            remediation_resources.append({
+                "title": "Android Keystore System",
+                "url": "https://developer.android.com/training/articles/keystore",
+                "type": "documentation",
+            })
+        else:
+            remediation_resources.append({
+                "title": "iOS Keychain Services",
+                "url": "https://developer.apple.com/documentation/security/keychain_services",
+                "type": "documentation",
+            })
+
+        # Build remediation commands
+        remediation_cmds = []
+        if app.platform == "android":
+            remediation_cmds = [
+                {
+                    "type": "android",
+                    "command": "KeyStore keyStore = KeyStore.getInstance(\"AndroidKeyStore\");",
+                    "description": "Use Android KeyStore for secure key storage",
+                },
+                {
+                    "type": "bash",
+                    "command": "# Add to local.properties (gitignored)\nAPI_KEY=your_key_here",
+                    "description": "Store keys in local.properties for build-time injection",
+                },
+            ]
+        else:
+            remediation_cmds = [
+                {
+                    "type": "ios",
+                    "command": "let query: [String: Any] = [kSecClass: kSecClassGenericPassword, ...]",
+                    "description": "Use iOS Keychain for secure storage",
+                },
+            ]
 
         return self.create_finding(
             app=app,
@@ -316,33 +430,60 @@ class SecretScanner(BaseAnalyzer):
             description=(
                 f"A {secret['name']} was found hardcoded in the application. "
                 f"The secret appears to be: {secret['value_redacted']}\n\n"
-                f"File: {secret['file_path']}\n"
-                f"Line: {secret['line_number']}"
+                f"**File:** `{secret['file_path']}`\n"
+                f"**Line:** {secret['line_number']}\n"
+                f"**Type:** {secret['type']}"
             ),
             impact=(
                 f"Hardcoded secrets can be extracted by anyone with access to the APK/IPA. "
                 f"This {secret['type']} could be used to access backend services, "
-                f"impersonate the application, or compromise user data."
+                f"impersonate the application, or compromise user data. "
+                f"If the secret grants access to cloud services, attackers could incur "
+                f"significant costs or access sensitive data."
             ),
             remediation=(
-                "Remove the hardcoded secret immediately. Use one of these approaches:\n"
-                "1. Store secrets server-side and fetch at runtime\n"
-                "2. Use Android Keystore / iOS Keychain for local secrets\n"
-                "3. Use environment-based configuration for build-time secrets\n"
-                "4. Consider using a secrets management service"
+                "Remove the hardcoded secret immediately. Use one of these approaches:\n\n"
+                "1. **Server-side storage**: Fetch secrets from your backend at runtime\n"
+                "2. **Secure storage**: Use Android Keystore / iOS Keychain\n"
+                "3. **Build-time injection**: Use environment variables or CI/CD secrets\n"
+                "4. **Secrets management**: Use AWS Secrets Manager, HashiCorp Vault, etc.\n\n"
+                "**Important**: Rotate compromised credentials immediately!"
             ),
             file_path=secret["file_path"],
             line_number=secret["line_number"],
             code_snippet=secret["context"],
-            poc_evidence=f"Found {secret['name']}: {secret['value_redacted']}",
-            poc_verification=(
-                "1. Decompile the APK/IPA\n"
-                f"2. Search for the pattern in {secret['file_path']}\n"
-                "3. Extract and test the credential"
-            ),
+            poc_evidence=f"Found {secret['name']}: {secret['value_redacted']}\nHash: {secret['value_hash']}",
+            poc_verification=f"grep -rn '{secret['value_redacted'][:8]}' <decompiled_path>/",
+            poc_commands=poc_cmds,
             cwe_id="CWE-798",
             cwe_name="Use of Hard-coded Credentials",
+            cvss_score=9.1 if secret["severity"] == "critical" else 7.5 if secret["severity"] == "high" else 5.3,
+            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N" if secret["severity"] == "critical" else "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
             owasp_masvs_category="MASVS-STORAGE",
             owasp_masvs_control="MASVS-STORAGE-1",
             owasp_mastg_test="MASTG-TEST-0001",
+            remediation_commands=remediation_cmds,
+            remediation_code={
+                "kotlin": '''// Use EncryptedSharedPreferences
+val masterKey = MasterKey.Builder(context)
+    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+    .build()
+
+val sharedPreferences = EncryptedSharedPreferences.create(
+    context,
+    "secret_prefs",
+    masterKey,
+    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+)''',
+                "swift": '''// Use iOS Keychain
+let query: [String: Any] = [
+    kSecClass as String: kSecClassGenericPassword,
+    kSecAttrAccount as String: "apiKey",
+    kSecValueData as String: keyData,
+    kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+]
+SecItemAdd(query as CFDictionary, nil)''',
+            },
+            remediation_resources=remediation_resources,
         )

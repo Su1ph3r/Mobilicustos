@@ -2,6 +2,26 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { findingsApi } from '@/services/api'
 
+/**
+ * Structured command for PoC or remediation steps.
+ * Matches Nubicustos format for parity.
+ */
+export interface StructuredCommand {
+  type: string // adb, frida, bash, android, ios, drozer, objection
+  command: string
+  description?: string
+}
+
+/**
+ * Structured resource link for remediation guidance.
+ * Matches Nubicustos format for parity.
+ */
+export interface RemediationResource {
+  title: string
+  url: string
+  type: string // documentation, blog, video, github, tool
+}
+
 export interface Finding {
   finding_id: string
   scan_id: string | null
@@ -19,24 +39,30 @@ export interface Finding {
   file_path: string | null
   line_number: number | null
   code_snippet: string | null
+  // PoC Evidence - structured for Nubicustos parity
   poc_evidence: string | null
   poc_verification: string | null
-  poc_commands: string[]
+  poc_commands: StructuredCommand[]
   poc_frida_script: string | null
   poc_screenshot_path: string | null
-  remediation_commands: string[]
-  remediation_code: Record<string, any>
-  remediation_resources: string[]
+  // Remediation - structured for Nubicustos parity
+  remediation_commands: StructuredCommand[]
+  remediation_code: Record<string, string> // {language: code_snippet}
+  remediation_resources: RemediationResource[]
+  // Risk scoring
   risk_score: number | null
   cvss_score: number | null
   cvss_vector: string | null
   cwe_id: string | null
   cwe_name: string | null
+  // OWASP mapping
   owasp_masvs_category: string | null
   owasp_masvs_control: string | null
   owasp_mastg_test: string | null
+  // Deduplication
   canonical_id: string | null
   tool_sources: string[]
+  // Timestamps
   first_seen: string
   last_seen: string
   created_at: string

@@ -99,20 +99,64 @@ class ManifestAnalyzer(BaseAnalyzer):
                     ),
                     file_path="AndroidManifest.xml",
                     code_snippet='android:debuggable="true"',
-                    poc_evidence="Found debuggable=true in manifest",
-                    poc_verification="adb shell run-as <package> ls",
+                    poc_evidence="Found debuggable=true in manifest. Application allows debugging access.",
+                    poc_verification=f"adb shell run-as {app.package_name} ls /data/data/{app.package_name}",
                     poc_commands=[
-                        "adb jdwp",
-                        f"adb shell run-as {app.package_name} ls",
+                        {
+                            "type": "adb",
+                            "command": "adb jdwp",
+                            "description": "List debuggable processes via JDWP",
+                        },
+                        {
+                            "type": "adb",
+                            "command": f"adb shell run-as {app.package_name} ls /data/data/{app.package_name}",
+                            "description": "Access app's private data directory (only works on debuggable apps)",
+                        },
+                        {
+                            "type": "adb",
+                            "command": f"adb shell am set-debug-app -w {app.package_name}",
+                            "description": "Set app to wait for debugger on launch",
+                        },
                     ],
+                    poc_frida_script=f'''// Verify debuggable flag at runtime
+Java.perform(function() {{
+    var context = Java.use('android.app.ActivityThread').currentApplication().getApplicationContext();
+    var appInfo = context.getApplicationInfo();
+    var debuggable = (appInfo.flags.value & 2) != 0;  // FLAG_DEBUGGABLE = 2
+    console.log("[*] Package: {app.package_name}");
+    console.log("[*] Debuggable: " + debuggable);
+}});
+''',
                     cwe_id="CWE-489",
                     cwe_name="Active Debug Code",
+                    cvss_score=7.2,
+                    cvss_vector="CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N",
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-4",
                     owasp_mastg_test="MASTG-TEST-0039",
+                    remediation_commands=[
+                        {
+                            "type": "android",
+                            "command": "buildTypes { release { debuggable false } }",
+                            "description": "Set debuggable to false in build.gradle for release builds",
+                        },
+                    ],
                     remediation_code={
-                        "android": 'android:debuggable="false"',
+                        "xml": 'android:debuggable="false"',
+                        "gradle": "android {\n    buildTypes {\n        release {\n            debuggable false\n        }\n    }\n}",
                     },
+                    remediation_resources=[
+                        {
+                            "title": "OWASP MASTG - Testing for Debugging Symbols",
+                            "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0039/",
+                            "type": "documentation",
+                        },
+                        {
+                            "title": "Android Developer - Configure Build Variants",
+                            "url": "https://developer.android.com/build/build-variants",
+                            "type": "documentation",
+                        },
+                    ],
                 ))
 
         return findings
@@ -150,20 +194,55 @@ class ManifestAnalyzer(BaseAnalyzer):
                     ),
                     file_path="AndroidManifest.xml",
                     code_snippet=f'android:allowBackup="{backup or "true (default)}"',
-                    poc_evidence=f"allowBackup is {'not set (defaults to true)' if backup is None else 'explicitly set to true'}",
-                    poc_verification="1. Connect device via USB\n2. Run adb backup command\n3. Extract and examine backup contents",
+                    poc_evidence=f"allowBackup is {'not set (defaults to true)' if backup is None else 'explicitly set to true'}. Data can be extracted via ADB backup.",
+                    poc_verification=f"adb backup -f backup.ab -apk {app.package_name}",
                     poc_commands=[
-                        f"adb backup -apk {app.package_name}",
-                        "dd if=backup.ab bs=24 skip=1 | openssl zlib -d > backup.tar",
-                        "tar -xf backup.tar && ls -la",
+                        {
+                            "type": "adb",
+                            "command": f"adb backup -f backup.ab -apk {app.package_name}",
+                            "description": "Create backup of app data",
+                        },
+                        {
+                            "type": "bash",
+                            "command": "dd if=backup.ab bs=24 skip=1 | python3 -c \"import zlib,sys;sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))\" > backup.tar",
+                            "description": "Extract backup archive (Android backup format)",
+                        },
+                        {
+                            "type": "bash",
+                            "command": "tar -xf backup.tar && find apps -type f -name '*.db' -o -name '*.xml'",
+                            "description": "Unpack and search for sensitive data files",
+                        },
                     ],
                     cwe_id="CWE-530",
                     cwe_name="Exposure of Backup File to an Unauthorized Control Sphere",
+                    cvss_score=5.3,
+                    cvss_vector="CVSS:3.1/AV:P/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
                     owasp_masvs_category="MASVS-STORAGE",
                     owasp_masvs_control="MASVS-STORAGE-2",
+                    owasp_mastg_test="MASTG-TEST-0008",
+                    remediation_commands=[
+                        {
+                            "type": "android",
+                            "command": 'android:allowBackup="false"',
+                            "description": "Add to <application> tag in AndroidManifest.xml",
+                        },
+                    ],
                     remediation_code={
-                        "android": 'android:allowBackup="false"',
+                        "xml": '<application\n    android:allowBackup="false"\n    android:fullBackupContent="false">',
+                        "xml-api31": '<application\n    android:allowBackup="false"\n    android:dataExtractionRules="@xml/data_extraction_rules">',
                     },
+                    remediation_resources=[
+                        {
+                            "title": "OWASP MASTG - Testing Backups for Sensitive Data",
+                            "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0008/",
+                            "type": "documentation",
+                        },
+                        {
+                            "title": "Android Developer - Back up user data",
+                            "url": "https://developer.android.com/guide/topics/data/backup",
+                            "type": "documentation",
+                        },
+                    ],
                 ))
 
         return findings
@@ -189,15 +268,62 @@ class ManifestAnalyzer(BaseAnalyzer):
                 if exported == "true" and not permission:
                     severity = "high" if comp_type in ("service", "provider") else "medium"
 
-                    # Build PoC command based on component type
+                    # Build PoC commands based on component type
+                    poc_cmds = []
                     if comp_type == "activity":
-                        poc_cmd = f"adb shell am start -n {app.package_name}/{name}"
+                        poc_cmds = [
+                            {
+                                "type": "adb",
+                                "command": f"adb shell am start -n {app.package_name}/{name}",
+                                "description": f"Launch the exported activity",
+                            },
+                            {
+                                "type": "adb",
+                                "command": f"adb shell am start -n {app.package_name}/{name} -e secret_data 'test'",
+                                "description": "Test passing extra data to the activity",
+                            },
+                        ]
                     elif comp_type == "service":
-                        poc_cmd = f"adb shell am startservice -n {app.package_name}/{name}"
+                        poc_cmds = [
+                            {
+                                "type": "adb",
+                                "command": f"adb shell am startservice -n {app.package_name}/{name}",
+                                "description": "Start the exported service",
+                            },
+                            {
+                                "type": "drozer",
+                                "command": f"run app.service.send {app.package_name} {name}",
+                                "description": "Send message to service via Drozer",
+                            },
+                        ]
                     elif comp_type == "receiver":
-                        poc_cmd = f"adb shell am broadcast -n {app.package_name}/{name}"
+                        poc_cmds = [
+                            {
+                                "type": "adb",
+                                "command": f"adb shell am broadcast -n {app.package_name}/{name}",
+                                "description": "Send broadcast to the receiver",
+                            },
+                        ]
                     else:  # provider
-                        poc_cmd = f"adb shell content query --uri content://{app.package_name}.provider/"
+                        poc_cmds = [
+                            {
+                                "type": "adb",
+                                "command": f"adb shell content query --uri content://{app.package_name}.provider/",
+                                "description": "Query the content provider",
+                            },
+                            {
+                                "type": "drozer",
+                                "command": f"run app.provider.query content://{app.package_name}.provider/",
+                                "description": "Query provider via Drozer for deeper analysis",
+                            },
+                        ]
+
+                    # Add Drozer analysis command
+                    poc_cmds.append({
+                        "type": "drozer",
+                        "command": f"run app.{comp_type}.info -a {app.package_name}",
+                        "description": f"Enumerate {comp_type} details with Drozer",
+                    })
 
                     findings.append(self.create_finding(
                         app=app,
@@ -220,17 +346,44 @@ class ManifestAnalyzer(BaseAnalyzer):
                         ),
                         file_path="AndroidManifest.xml",
                         code_snippet=f'<{comp_type} android:name="{name}" android:exported="true">',
-                        poc_evidence=f"Exported {comp_type} '{name}' has no permission protection",
-                        poc_verification=f"1. Use adb to invoke the {comp_type}\n2. Check if it responds without permission\n3. Analyze data returned or actions triggered",
-                        poc_commands=[
-                            poc_cmd,
-                            f"# Use Drozer for deeper analysis:",
-                            f"dz> run app.{comp_type}.info -a {app.package_name}",
-                        ],
+                        poc_evidence=f"Exported {comp_type} '{name}' has no permission protection. Component can be invoked by any application on the device.",
+                        poc_verification=poc_cmds[0]["command"] if poc_cmds else None,
+                        poc_commands=poc_cmds,
                         cwe_id="CWE-926",
                         cwe_name="Improper Export of Android Application Components",
+                        cvss_score=6.5 if comp_type in ("service", "provider") else 5.3,
+                        cvss_vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" if comp_type == "provider" else "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
                         owasp_masvs_category="MASVS-PLATFORM",
                         owasp_masvs_control="MASVS-PLATFORM-1",
+                        owasp_mastg_test="MASTG-TEST-0024",
+                        remediation_commands=[
+                            {
+                                "type": "android",
+                                "command": f'android:exported="false"',
+                                "description": f"Add to {comp_type} declaration if external access not needed",
+                            },
+                            {
+                                "type": "android",
+                                "command": f'android:permission="{app.package_name}.permission.ACCESS_{comp_type.upper()}"',
+                                "description": f"Protect with custom permission if external access is required",
+                            },
+                        ],
+                        remediation_code={
+                            "xml": f'<{comp_type}\n    android:name="{name}"\n    android:exported="false" />',
+                            "xml-protected": f'<{comp_type}\n    android:name="{name}"\n    android:exported="true"\n    android:permission="{app.package_name}.permission.ACCESS" />',
+                        },
+                        remediation_resources=[
+                            {
+                                "title": "OWASP MASTG - Testing for Vulnerable IPC",
+                                "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0024/",
+                                "type": "documentation",
+                            },
+                            {
+                                "title": "Android Developer - App Manifest Overview",
+                                "url": "https://developer.android.com/guide/topics/manifest/manifest-intro",
+                                "type": "documentation",
+                            },
+                        ],
                     ))
 
         return findings
@@ -352,7 +505,7 @@ class ManifestAnalyzer(BaseAnalyzer):
 
         if requested_perms:
             perm_list = "\n".join(f"- {p[0]} ({p[1]})" for p in requested_perms)
-            perm_xml = "\n".join(f'<uses-permission android:name="{p[0]}" />' for p in requested_perms[:5])
+            perm_xml = "\n".join(f'<uses-permission android:name="{p[0]}" />' for p in requested_perms)
             findings.append(self.create_finding(
                 app=app,
                 title=f"Dangerous Permissions Requested ({len(requested_perms)})",

@@ -119,11 +119,16 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                     poc_evidence="debug-overrides element found in network security config",
                     poc_verification="1. Extract APK\n2. Check res/xml/network_security_config.xml\n3. Verify debug-overrides usage",
                     poc_commands=[
-                        f"apktool d {app.file_path} -o /tmp/apk_out",
-                        "cat /tmp/apk_out/res/xml/network_security_config.xml",
+                        {"type": "bash", "command": f"apktool d {app.file_path} -o /tmp/apk_out", "description": "Decompile APK"},
+                        {"type": "bash", "command": "cat /tmp/apk_out/res/xml/network_security_config.xml", "description": "View network security config"},
                     ],
+                    cwe_id="CWE-489",
+                    cwe_name="Active Debug Code",
+                    cvss_score=5.3,
+                    cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                     owasp_masvs_category="MASVS-NETWORK",
                     owasp_masvs_control="MASVS-NETWORK-1",
+                    owasp_mastg_test="MASTG-TEST-0020",
                 ))
 
             # Check for certificate pinning
@@ -151,11 +156,29 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                     poc_evidence="No pin-set element found in network security config",
                     poc_verification="1. Check network_security_config.xml for pin-set\n2. Test with proxy (Burp/mitmproxy)",
                     poc_commands=[
-                        "grep -r 'pin-set' /tmp/apk_out/res/xml/",
-                        "# Test MITM: mitmproxy -p 8080",
+                        {"type": "bash", "command": "grep -r 'pin-set' /tmp/apk_out/res/xml/", "description": "Search for certificate pinning config"},
+                        {"type": "bash", "command": "mitmproxy -p 8080", "description": "Start MITM proxy to test certificate validation"},
                     ],
+                    cwe_id="CWE-295",
+                    cwe_name="Improper Certificate Validation",
                     owasp_masvs_category="MASVS-NETWORK",
                     owasp_masvs_control="MASVS-NETWORK-2",
+                    owasp_mastg_test="MASTG-TEST-0021",
+                    remediation_code={
+                        "xml": '''<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="true">api.example.com</domain>
+        <pin-set expiration="2026-01-01">
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+            <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>'''
+                    },
+                    remediation_resources=[
+                        {"title": "OWASP MASTG - Testing Custom Certificate Stores", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0021/", "type": "documentation"},
+                        {"title": "Android Network Security Config", "url": "https://developer.android.com/training/articles/security-config", "type": "documentation"},
+                    ],
                 ))
             else:
                 # Check pin expiration
@@ -211,13 +234,36 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                 poc_evidence=f"cleartextTrafficPermitted='true' in {config_name}",
                 poc_verification="1. Set up HTTP proxy\n2. Force app to use HTTP\n3. Verify traffic is unencrypted",
                 poc_commands=[
-                    f"apktool d {app.file_path} -o /tmp/apk_out",
-                    "grep -r 'cleartextTrafficPermitted' /tmp/apk_out/",
-                    "# Intercept with: mitmproxy --mode transparent",
+                    {"type": "bash", "command": f"apktool d {app.file_path} -o /tmp/apk_out", "description": "Decompile APK"},
+                    {"type": "bash", "command": "grep -r 'cleartextTrafficPermitted' /tmp/apk_out/", "description": "Find cleartext config"},
+                    {"type": "bash", "command": "mitmproxy --mode transparent", "description": "Intercept HTTP traffic"},
                 ],
+                poc_frida_script='''Java.perform(function() {
+    var HttpURLConnection = Java.use('java.net.HttpURLConnection');
+    HttpURLConnection.getInputStream.implementation = function() {
+        console.log("[*] HTTP request to: " + this.getURL().toString());
+        return this.getInputStream();
+    };
+});''',
                 cwe_id="CWE-319",
+                cwe_name="Cleartext Transmission of Sensitive Information",
+                cvss_score=7.5,
+                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
                 owasp_masvs_category="MASVS-NETWORK",
                 owasp_masvs_control="MASVS-NETWORK-1",
+                owasp_mastg_test="MASTG-TEST-0019",
+                remediation_code={
+                    "xml": '''<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>'''
+                },
+                remediation_resources=[
+                    {"title": "OWASP MASTG - Testing for Cleartext Traffic", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0019/", "type": "documentation"},
+                ],
             ))
 
         # Check trust-anchors
@@ -243,12 +289,23 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                         poc_evidence=f"User certificates trusted in {config_name}",
                         poc_verification="1. Install proxy CA on device\n2. Configure proxy\n3. Intercept HTTPS traffic",
                         poc_commands=[
-                            "adb push burp_ca.crt /sdcard/",
-                            "# Install cert in Settings > Security > Install certificates",
-                            "mitmproxy -p 8080",
+                            {"type": "adb", "command": "adb push burp_ca.crt /sdcard/", "description": "Push proxy CA certificate to device"},
+                            {"type": "adb", "command": "adb shell settings put global http_proxy 192.168.1.100:8080", "description": "Configure device proxy"},
+                            {"type": "bash", "command": "mitmproxy -p 8080", "description": "Start MITM proxy"},
                         ],
+                        cwe_id="CWE-295",
+                        cwe_name="Improper Certificate Validation",
+                        cvss_score=5.9,
+                        cvss_vector="CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
                         owasp_masvs_category="MASVS-NETWORK",
                         owasp_masvs_control="MASVS-NETWORK-1",
+                        owasp_mastg_test="MASTG-TEST-0020",
+                        remediation_code={
+                            "xml": '''<!-- Only trust system certificates -->
+<trust-anchors>
+    <certificates src="system" />
+</trust-anchors>'''
+                        },
                     ))
 
                 if src and src.startswith("@raw/"):
@@ -294,12 +351,19 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                 poc_evidence="usesCleartextTraffic='true' found in manifest",
                 poc_verification="1. Decompile APK with apktool\n2. Check AndroidManifest.xml\n3. Test HTTP connections",
                 poc_commands=[
-                    f"apktool d {app.file_path} -o /tmp/apk_out",
-                    "grep -i 'usesCleartextTraffic' /tmp/apk_out/AndroidManifest.xml",
+                    {"type": "bash", "command": f"apktool d {app.file_path} -o /tmp/apk_out", "description": "Decompile APK"},
+                    {"type": "bash", "command": "grep -i 'usesCleartextTraffic' /tmp/apk_out/AndroidManifest.xml", "description": "Check cleartext setting"},
                 ],
                 cwe_id="CWE-319",
+                cwe_name="Cleartext Transmission of Sensitive Information",
+                cvss_score=7.5,
+                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
                 owasp_masvs_category="MASVS-NETWORK",
                 owasp_masvs_control="MASVS-NETWORK-1",
+                owasp_mastg_test="MASTG-TEST-0019",
+                remediation_code={
+                    "xml": '<application android:usesCleartextTraffic="false" ...>'
+                },
             ))
 
         return findings
@@ -334,11 +398,19 @@ class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
                 poc_evidence=f"No network_security_config.xml, targetSdk={app.target_sdk_version}",
                 poc_verification="1. Check res/xml/ for network_security_config.xml\n2. Test HTTP connections",
                 poc_commands=[
-                    f"apktool d {app.file_path} -o /tmp/apk_out",
-                    "ls -la /tmp/apk_out/res/xml/",
+                    {"type": "bash", "command": f"apktool d {app.file_path} -o /tmp/apk_out", "description": "Decompile APK"},
+                    {"type": "bash", "command": "ls -la /tmp/apk_out/res/xml/", "description": "Check for network security config"},
                 ],
+                cwe_id="CWE-319",
+                cwe_name="Cleartext Transmission of Sensitive Information",
+                cvss_score=5.3,
+                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                 owasp_masvs_category="MASVS-NETWORK",
                 owasp_masvs_control="MASVS-NETWORK-1",
+                owasp_mastg_test="MASTG-TEST-0019",
+                remediation_commands=[
+                    {"type": "android", "command": "android:networkSecurityConfig=\"@xml/network_security_config\"", "description": "Add to AndroidManifest.xml application tag"},
+                ],
             ))
         else:
             findings.append(self.create_finding(

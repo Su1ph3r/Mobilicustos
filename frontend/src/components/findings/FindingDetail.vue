@@ -75,24 +75,11 @@
       <pre class="code-block">{{ finding.code_snippet }}</pre>
     </div>
 
-    <!-- PoC Evidence Section -->
-    <div v-if="finding.poc_evidence || finding.poc_frida_script" class="detail-section">
-      <h4>
-        <i class="pi pi-eye" />
-        Proof of Concept
-      </h4>
-      <div v-if="finding.poc_evidence" class="poc-content">
-        <p>{{ finding.poc_evidence }}</p>
-      </div>
-      <div v-if="finding.poc_frida_script" class="poc-script">
-        <h5>Frida Script</h5>
-        <pre class="code-block frida">{{ finding.poc_frida_script }}</pre>
-      </div>
-      <div v-if="finding.poc_commands && finding.poc_commands.length > 0" class="poc-commands">
-        <h5>PoC Commands</h5>
-        <pre class="code-block">{{ finding.poc_commands.join('\n') }}</pre>
-      </div>
-    </div>
+    <!-- Verification Command (Nubicustos parity) -->
+    <VerificationCommand :finding="finding" />
+
+    <!-- PoC Evidence Section (Nubicustos parity) -->
+    <PocEvidence :finding="finding" />
 
     <!-- Impact Section -->
     <div v-if="finding.impact" class="detail-section">
@@ -103,30 +90,8 @@
       <p class="description">{{ finding.impact }}</p>
     </div>
 
-    <!-- Remediation Section -->
-    <div class="detail-section">
-      <h4>
-        <i class="pi pi-wrench" />
-        Remediation
-      </h4>
-      <p class="description">{{ finding.remediation || 'No remediation guidance available' }}</p>
-      <div v-if="finding.owasp_masvs_control" class="masvs-reference">
-        <span class="label">MASVS Control:</span>
-        <span class="value">{{ finding.owasp_masvs_control }}</span>
-      </div>
-      <div v-if="finding.owasp_mastg_test" class="masvs-reference">
-        <span class="label">MASTG Test:</span>
-        <span class="value">{{ finding.owasp_mastg_test }}</span>
-      </div>
-      <div v-if="finding.remediation_resources && finding.remediation_resources.length > 0" class="resources-list">
-        <h5>Resources</h5>
-        <ul>
-          <li v-for="(resource, idx) in finding.remediation_resources" :key="idx">
-            <a :href="resource" target="_blank" rel="noopener">{{ resource }}</a>
-          </li>
-        </ul>
-      </div>
-    </div>
+    <!-- Remediation Section (Nubicustos parity) -->
+    <RemediationPanel :finding="finding" />
 
     <!-- Metadata Section -->
     <div class="detail-section metadata-section">
@@ -157,6 +122,10 @@
             {{ finding.cvss_score }}
           </span>
         </div>
+        <div v-if="finding.cvss_vector" class="detail-item">
+          <span class="label">CVSS Vector</span>
+          <span class="value code small">{{ finding.cvss_vector }}</span>
+        </div>
         <div v-if="finding.risk_score" class="detail-item">
           <span class="label">Risk Score</span>
           <span class="value">{{ finding.risk_score }}</span>
@@ -168,6 +137,9 @@
 
 <script setup lang="ts">
 import type { Finding } from '@/stores/findings'
+import VerificationCommand from './VerificationCommand.vue'
+import PocEvidence from './PocEvidence.vue'
+import RemediationPanel from './RemediationPanel.vue'
 
 defineProps<{
   finding: Finding
@@ -346,62 +318,6 @@ const getCvssSeverity = (score: number): string => {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
-}
-
-.code-block.frida {
-  background: #1a1a2e;
-  border-left: 3px solid var(--accent-primary, var(--primary-color));
-}
-
-.poc-content {
-  padding: var(--spacing-md);
-  background: var(--bg-tertiary, var(--surface-ground));
-  border-radius: var(--radius-sm);
-  margin-bottom: var(--spacing-md);
-}
-
-.poc-content p {
-  margin: 0;
-  color: var(--text-primary, var(--text-color));
-}
-
-.masvs-reference {
-  display: flex;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm) 0;
-  font-size: 0.875rem;
-}
-
-.masvs-reference .label {
-  font-weight: 600;
-  color: var(--text-secondary, var(--text-color-secondary));
-}
-
-.masvs-reference .value {
-  color: var(--accent-primary, var(--primary-color));
-}
-
-.resources-list {
-  margin-top: var(--spacing-md);
-}
-
-.resources-list ul {
-  margin: 0;
-  padding-left: var(--spacing-lg);
-}
-
-.resources-list li {
-  margin-bottom: var(--spacing-xs);
-}
-
-.resources-list a {
-  color: var(--accent-primary, var(--primary-color));
-  text-decoration: none;
-  font-size: 0.875rem;
-}
-
-.resources-list a:hover {
-  text-decoration: underline;
 }
 
 .metadata-section {

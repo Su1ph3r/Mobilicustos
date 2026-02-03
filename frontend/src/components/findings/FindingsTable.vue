@@ -115,7 +115,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { Finding } from '@/stores/findings'
-import DataTable from 'primevue/datatable'
+import DataTable, { type DataTableSortEvent } from 'primevue/datatable'
 import Column from 'primevue/column'
 import Paginator from 'primevue/paginator'
 import ProgressSpinner from 'primevue/progressspinner'
@@ -181,10 +181,11 @@ const onPageChange = (event: { page: number; rows: number }) => {
   })
 }
 
-const onSort = (event: { sortField: string; sortOrder: number }) => {
+const onSort = (event: DataTableSortEvent) => {
+  const field = typeof event.sortField === 'function' ? 'severity' : (event.sortField || 'severity')
   emit('sort-change', {
-    field: event.sortField,
-    order: event.sortOrder,
+    field,
+    order: event.sortOrder ?? -1,
   })
 }
 </script>

@@ -147,8 +147,8 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     remediation="Implement multiple jailbreak detection methods and use "
                     "obfuscation to make bypassing more difficult.",
                     file_path=f"Payload/*.app/{binary_name}",
-                    code_snippet=f"// Jailbreak indicators found:\n{chr(10).join(jailbreak_indicators[:5])}",
-                    poc_evidence=f"Indicators found: {', '.join(jailbreak_indicators[:10])}",
+                    code_snippet=f"// Jailbreak indicators found ({len(jailbreak_indicators)}):\n{chr(10).join(jailbreak_indicators)}",
+                    poc_evidence=f"Jailbreak detection indicators ({len(jailbreak_indicators)}):\n" + "\n".join(f"• {ind}" for ind in jailbreak_indicators),
                     poc_verification="1. Extract IPA\n2. Run strings on binary\n3. Search for jailbreak paths",
                     poc_commands=[
                         f"unzip -o {app.file_path} -d /tmp/extracted",
@@ -179,8 +179,8 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     remediation="Use HTTPS for all network communications. Update hardcoded "
                     "URLs to use HTTPS protocol.",
                     file_path=f"Payload/*.app/{binary_name}",
-                    code_snippet=f"// Insecure URLs found:\n{chr(10).join(insecure_urls[:5])}",
-                    poc_evidence=f"Insecure URLs: {', '.join(insecure_urls[:5])}",
+                    code_snippet=f"// Insecure HTTP URLs found ({len(insecure_urls)}):\n{chr(10).join(insecure_urls)}",
+                    poc_evidence=f"Insecure HTTP URLs ({len(insecure_urls)}):\n" + "\n".join(f"• {url}" for url in insecure_urls),
                     poc_verification="1. Extract IPA\n2. Run strings on binary\n3. Grep for http://",
                     poc_commands=[
                         f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep 'http://'",
@@ -205,17 +205,16 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
         all_secret_matches = []
         for pattern, name in secret_patterns:
             matches = [s for s in strings if pattern.lower() in s.lower() and len(s) < 500]
-            for match in matches[:5]:  # Limit to 5 per pattern
+            for match in matches:
                 all_secret_matches.append((pattern, name, match))
 
         if all_secret_matches:
             # Group by pattern for display
             patterns_found = list(set(m[1] for m in all_secret_matches))
-            sample_secrets = all_secret_matches[:10]  # Show up to 10 total
 
             # Format the evidence with actual strings found
             evidence_lines = []
-            for pattern, name, match in sample_secrets:
+            for pattern, name, match in all_secret_matches:
                 # Truncate very long matches
                 display_match = match if len(match) <= 100 else match[:97] + "..."
                 evidence_lines.append(f"[{name}] {display_match}")
@@ -441,16 +440,16 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
             findings.append(
                 self.create_finding(
                     app=app,
-                    title="Security APIs Used",
-                    description=f"The application uses iOS security APIs: "
-                    f"{', '.join(security_funcs[:10])}",
+                    title=f"Security APIs Used ({len(security_funcs)} functions)",
+                    description=f"The application uses {len(security_funcs)} iOS security APIs:\n\n"
+                    f"{chr(10).join(f'• {func}' for func in security_funcs)}",
                     severity="info",
                     category="Cryptography",
                     impact="Usage of security APIs is positive but requires proper implementation.",
                     remediation="Verify that security APIs are used correctly with proper "
                     "key management and secure defaults.",
                     file_path=f"Payload/*.app/{binary_name}",
-                    poc_evidence=f"Security APIs: {', '.join(security_funcs[:5])}",
+                    poc_evidence=f"Security APIs detected ({len(security_funcs)}):\n" + "\n".join(f"• {func}" for func in security_funcs),
                     owasp_masvs_category="MASVS-CRYPTO",
                 )
             )
@@ -480,15 +479,15 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                 findings.append(
                     self.create_finding(
                         app=app,
-                        title=f"Sensitive Data Handling: {pattern}",
-                        description=f"{message}. Classes: {', '.join(matching[:5])}",
+                        title=f"Sensitive Data Handling: {pattern} ({len(matching)} classes)",
+                        description=f"{message}.\n\nClasses found ({len(matching)}):\n" + "\n".join(f"• {c}" for c in matching),
                         severity="info",
                         category="Data Handling",
                         impact="Review these classes to ensure sensitive data is handled securely.",
                         remediation="Audit the implementation of these classes for security issues.",
                         file_path=f"Payload/*.app/{binary_name}",
-                        code_snippet=f"// Classes containing '{pattern}':\n{chr(10).join(matching[:5])}",
-                        poc_evidence=f"Sensitive classes: {', '.join(matching[:5])}",
+                        code_snippet=f"// Classes containing '{pattern}' ({len(matching)}):\n{chr(10).join(matching)}",
+                        poc_evidence=f"Sensitive classes containing '{pattern}' ({len(matching)}):\n" + "\n".join(f"• {c}" for c in matching),
                         poc_verification="1. Run class-dump on binary\n2. Search for sensitive class names",
                         poc_commands=[
                             f"class-dump /tmp/extracted/Payload/*.app/{binary_name} | grep -i '{pattern}'",

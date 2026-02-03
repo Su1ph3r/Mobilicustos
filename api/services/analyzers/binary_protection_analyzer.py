@@ -422,7 +422,28 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                 cwe_name="Missing Encryption of Sensitive Data",
                 owasp_masvs_category="MASVS-RESILIENCE",
                 owasp_masvs_control="MSTG-RESILIENCE-3",
+                owasp_mastg_test="MASTG-TEST-0039",
                 poc_verification="1. Use jadx or Hopper to decompile the app\n2. Check if class/method names are readable\n3. Look for clear business logic",
+                poc_commands=[
+                    {"type": "bash", "command": "jadx -d /tmp/decompiled app.apk", "description": "Decompile APK with jadx"},
+                    {"type": "bash", "command": "ls /tmp/decompiled/sources/", "description": "Check package structure for obfuscated names"},
+                ],
+                cvss_score=5.3,
+                cvss_vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+                remediation_code={
+                    "gradle": '''android {
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}'''
+                },
+                remediation_resources=[
+                    {"title": "OWASP MASTG - Testing for Debugging Symbols", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0039/", "type": "documentation"},
+                    {"title": "Android - Shrink, obfuscate, and optimize your app", "url": "https://developer.android.com/studio/build/shrink-code", "type": "documentation"},
+                ],
             ))
         else:
             tool = protections.get("obfuscation", {}).get("tool", "Unknown")
@@ -439,6 +460,54 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
 
         # Missing root/jailbreak detection
         if not protections.get("root_jailbreak_detection", {}).get("detected"):
+            platform_specific = {
+                "android": {
+                    "poc_commands": [
+                        {"type": "adb", "command": "adb shell su -c 'id'", "description": "Verify device is rooted"},
+                        {"type": "bash", "command": "grep -rn 'isRooted\\|RootBeer\\|checkRoot' /tmp/decompiled/", "description": "Search for root detection code"},
+                    ],
+                    "poc_frida": '''Java.perform(function() {
+    // Check if app detects root
+    var RootBeer = Java.use('com.scottyab.rootbeer.RootBeer');
+    RootBeer.isRooted.implementation = function() {
+        console.log("[*] RootBeer.isRooted() called - returning false");
+        return false;
+    };
+});''',
+                    "remediation_code": {
+                        "kotlin": '''val rootBeer = RootBeer(context)
+if (rootBeer.isRooted) {
+    // Handle rooted device - restrict functionality or warn user
+    showSecurityWarning()
+}''',
+                        "gradle": "implementation 'com.scottyab:rootbeer-lib:0.1.0'"
+                    },
+                },
+                "ios": {
+                    "poc_commands": [
+                        {"type": "bash", "command": "ssh root@device 'ls /Applications/Cydia.app'", "description": "Check for Cydia"},
+                        {"type": "bash", "command": "strings app_binary | grep -i jailbreak", "description": "Search for jailbreak detection"},
+                    ],
+                    "poc_frida": '''// Hook jailbreak detection
+var FileManager = ObjC.classes.NSFileManager;
+Interceptor.attach(FileManager['- fileExistsAtPath:'].implementation, {
+    onEnter: function(args) {
+        var path = ObjC.Object(args[2]).toString();
+        if (path.indexOf('Cydia') !== -1 || path.indexOf('substrate') !== -1) {
+            console.log("[*] Jailbreak check: " + path);
+        }
+    }
+});''',
+                    "remediation_code": {
+                        "swift": '''import IOSSecuritySuite
+if IOSSecuritySuite.amIJailbroken() {
+    // Handle jailbroken device
+    showSecurityWarning()
+}'''
+                    },
+                }
+            }
+            platform = platform_specific.get(app.platform, platform_specific["android"])
             results.append(AnalyzerResult(
                 title="Root/Jailbreak Detection Not Implemented",
                 description="The application does not appear to detect rooted Android devices or jailbroken iOS devices.",
@@ -450,6 +519,18 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                 cwe_name="Weaknesses in Mobile Applications",
                 owasp_masvs_category="MASVS-RESILIENCE",
                 owasp_masvs_control="MSTG-RESILIENCE-1",
+                owasp_mastg_test="MASTG-TEST-0046",
+                poc_verification="1. Run app on rooted/jailbroken device\n2. Verify app runs without restriction\n3. Check for root/jailbreak detection code",
+                poc_commands=platform["poc_commands"],
+                poc_frida_script=platform["poc_frida"],
+                cvss_score=4.3,
+                cvss_vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+                remediation_code=platform["remediation_code"],
+                remediation_resources=[
+                    {"title": "OWASP MASTG - Testing Root Detection", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0046/", "type": "documentation"},
+                    {"title": "RootBeer - Android Root Detection", "url": "https://github.com/scottyab/rootbeer", "type": "github"},
+                    {"title": "IOSSecuritySuite", "url": "https://github.com/nickreynolds/IOSSecuritySuite", "type": "github"},
+                ],
             ))
 
         # Missing anti-debugging
@@ -465,6 +546,36 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                 cwe_name="Error Handling",
                 owasp_masvs_category="MASVS-RESILIENCE",
                 owasp_masvs_control="MSTG-RESILIENCE-2",
+                owasp_mastg_test="MASTG-TEST-0040",
+                poc_verification="1. Attach debugger (lldb/gdb/Android Studio)\n2. Set breakpoints in sensitive functions\n3. Verify app doesn't detect/prevent debugging",
+                poc_commands=[
+                    {"type": "adb", "command": "adb shell am set-debug-app -w --persistent com.example.app", "description": "Enable debugging for app"},
+                    {"type": "frida", "command": "frida -U -f com.example.app -l bypass_debug.js", "description": "Attach Frida to app"},
+                ],
+                poc_frida_script='''Java.perform(function() {
+    // Check if debugging is detected
+    var Debug = Java.use('android.os.Debug');
+    Debug.isDebuggerConnected.implementation = function() {
+        console.log("[*] Debug.isDebuggerConnected() called");
+        return false;  // Bypass detection
+    };
+});''',
+                cvss_score=3.3,
+                cvss_vector="CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N",
+                remediation_code={
+                    "java": '''// Simple debugger detection
+if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) {
+    // Debugger detected - take action
+    android.os.Process.killProcess(android.os.Process.myPid());
+}''',
+                    "kotlin": '''// Simple debugger detection
+if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) {
+    android.os.Process.killProcess(android.os.Process.myPid())
+}'''
+                },
+                remediation_resources=[
+                    {"title": "OWASP MASTG - Testing Anti-Debugging Detection", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0040/", "type": "documentation"},
+                ],
             ))
 
         # RASP detection
@@ -500,6 +611,17 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                     cwe_name="Improper Restriction of Operations within Memory Buffer",
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MSTG-CODE-9",
+                    owasp_mastg_test="MASTG-TEST-0082",
+                    poc_verification="1. Extract binary from IPA\n2. Run otool -hv to check flags\n3. Verify PIE flag is present",
+                    poc_commands=[
+                        {"type": "bash", "command": "otool -hv /path/to/binary", "description": "Check binary flags for PIE"},
+                        {"type": "bash", "command": "otool -l /path/to/binary | grep -A5 LC_SEGMENT", "description": "Check segment load addresses"},
+                    ],
+                    cvss_score=7.5,
+                    cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+                    remediation_resources=[
+                        {"title": "OWASP MASTG - Testing for Memory Corruption Bugs", "url": "https://mas.owasp.org/MASTG/tests/ios/MASVS-CODE/MASTG-TEST-0082/", "type": "documentation"},
+                    ],
                 ))
 
             if protections.get("stack_canary", {}).get("detected") is False:
@@ -514,6 +636,16 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                     cwe_name="Stack-based Buffer Overflow",
                     owasp_masvs_category="MASVS-CODE",
                     owasp_masvs_control="MSTG-CODE-9",
+                    owasp_mastg_test="MASTG-TEST-0082",
+                    poc_verification="1. Extract binary from IPA\n2. Run otool -Iv to check symbols\n3. Look for __stack_chk_fail",
+                    poc_commands=[
+                        {"type": "bash", "command": "otool -Iv /path/to/binary | grep stack_chk", "description": "Check for stack canary symbols"},
+                    ],
+                    cvss_score=5.9,
+                    cvss_vector="CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N",
+                    remediation_resources=[
+                        {"title": "OWASP MASTG - Testing for Memory Corruption Bugs", "url": "https://mas.owasp.org/MASTG/tests/ios/MASVS-CODE/MASTG-TEST-0082/", "type": "documentation"},
+                    ],
                 ))
 
             if protections.get("arc", {}).get("detected") is False:
@@ -528,6 +660,17 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                     cwe_name="Use After Free",
                     owasp_masvs_category="MASVS-CODE",
                     owasp_masvs_control="MSTG-CODE-9",
+                    owasp_mastg_test="MASTG-TEST-0082",
+                    poc_verification="1. Extract binary from IPA\n2. Run otool -Iv to check symbols\n3. Look for objc_release/objc_retain",
+                    poc_commands=[
+                        {"type": "bash", "command": "otool -Iv /path/to/binary | grep -E 'objc_release|objc_retain'", "description": "Check for ARC symbols"},
+                    ],
+                    cvss_score=3.7,
+                    cvss_vector="CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L",
+                    remediation_resources=[
+                        {"title": "OWASP MASTG - Testing for Memory Corruption Bugs", "url": "https://mas.owasp.org/MASTG/tests/ios/MASVS-CODE/MASTG-TEST-0082/", "type": "documentation"},
+                        {"title": "Apple - Transitioning to ARC", "url": "https://developer.apple.com/library/archive/releasenotes/ObjectiveC/RN-TransitioningToARC/Introduction/Introduction.html", "type": "documentation"},
+                    ],
                 ))
 
         return results

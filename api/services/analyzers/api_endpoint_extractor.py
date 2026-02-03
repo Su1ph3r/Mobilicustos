@@ -328,10 +328,10 @@ class APIEndpointExtractor(BaseAnalyzer):
 
         host_summary = "\n".join([
             f"- {host}: {len(eps)} endpoints"
-            for host, eps in sorted(hosts.items(), key=lambda x: -len(x[1]))[:10]
+            for host, eps in sorted(hosts.items(), key=lambda x: -len(x[1]))
         ])
 
-        unique_base_urls = list(set(base_urls))[:5]
+        unique_base_urls = list(set(base_urls))
         base_url_text = "\n".join([f"- {url}" for url in unique_base_urls]) if unique_base_urls else "None detected"
 
         # Count issues
@@ -367,7 +367,7 @@ class APIEndpointExtractor(BaseAnalyzer):
         """Create finding for endpoints using HTTP."""
         endpoint_list = "\n".join([
             f"- {e.url} ({e.source_file}:{e.line_number or '?'})"
-            for e in endpoints[:10]
+            for e in endpoints
         ])
 
         return AnalyzerResult(
@@ -393,11 +393,11 @@ class APIEndpointExtractor(BaseAnalyzer):
         app: MobileApp
     ) -> AnalyzerResult:
         """Create finding for debug/test endpoints."""
-        endpoint_list = "\n".join([f"- {e.url}" for e in endpoints[:10]])
+        endpoint_list = "\n".join([f"- {e.url}" for e in endpoints])
 
         return AnalyzerResult(
             title=f"Debug/Test Endpoints Detected ({len(endpoints)})",
-            description=f"Debug or test endpoints were found:\n\n{endpoint_list}",
+            description=f"Debug or test endpoints found ({len(endpoints)}):\n\n{endpoint_list}",
             severity="medium",
             category="API Security",
             impact="Debug endpoints may expose sensitive functionality, bypass authentication, or leak information.",
@@ -417,11 +417,11 @@ class APIEndpointExtractor(BaseAnalyzer):
         app: MobileApp
     ) -> AnalyzerResult:
         """Create finding for exposed admin/swagger endpoints."""
-        endpoint_list = "\n".join([f"- {e.url}" for e in endpoints[:10]])
+        endpoint_list = "\n".join([f"- {e.url}" for e in endpoints])
 
         return AnalyzerResult(
             title=f"Sensitive Endpoints Exposed ({len(endpoints)})",
-            description=f"Admin or API documentation endpoints were found:\n\n{endpoint_list}",
+            description=f"Admin or API documentation endpoints found ({len(endpoints)}):\n\n{endpoint_list}",
             severity="medium",
             category="API Security",
             impact="Exposed admin endpoints or API documentation can provide attackers with valuable information about the API structure and potential attack vectors.",

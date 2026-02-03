@@ -4,7 +4,27 @@
       <!-- Evidence Tab -->
       <TabPanel v-if="evidence" value="evidence" header="Evidence">
         <div class="evidence-content">
-          <div class="evidence-text">{{ evidence }}</div>
+          <!-- Structured table for array data -->
+          <div v-if="parsedEvidence" class="evidence-table-container">
+            <table class="evidence-table">
+              <thead>
+                <tr>
+                  <th v-for="col in evidenceColumns" :key="col">{{ formatColumnHeader(col) }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in parsedEvidence" :key="idx">
+                  <td v-for="col in evidenceColumns" :key="col" :class="getColumnClass(col)">
+                    {{ row[col] || '-' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Code block for JSON/XML -->
+          <CodeBlock v-else-if="isCodeEvidence(evidence)" :code="evidence" :language="detectEvidenceLanguage(evidence)" />
+          <!-- Plain text -->
+          <pre v-else class="evidence-text">{{ evidence }}</pre>
         </div>
       </TabPanel>
 
@@ -27,18 +47,24 @@
       <!-- Commands Tab -->
       <TabPanel v-if="commands && commands.length > 0" value="commands" header="Commands">
         <div class="commands-content">
-          <div v-for="(cmd, index) in commands" :key="index" class="command-item">
-            <code class="command-text">{{ cmd }}</code>
-            <Button
-              icon="pi pi-copy"
-              class="p-button-sm p-button-text"
-              v-tooltip.top="'Copy command'"
-              @click="copyCommand(cmd)"
-            />
+          <div v-for="(cmd, index) in commands" :key="index" class="command-block">
+            <div class="command-block-header">
+              <div class="command-meta">
+                <Tag v-if="cmd.type" :value="cmd.type" :severity="getCommandSeverity(cmd.type)" class="command-type-tag" />
+                <span v-if="cmd.description" class="command-desc">{{ cmd.description }}</span>
+              </div>
+              <Button
+                icon="pi pi-copy"
+                class="p-button-sm p-button-text copy-btn"
+                v-tooltip.top="'Copy command'"
+                @click="copyCommand(cmd.command)"
+              />
+            </div>
+            <pre class="command-code"><code>{{ cmd.command }}</code></pre>
           </div>
           <div class="copy-all-section">
             <Button
-              label="Copy All"
+              label="Copy All Commands"
               icon="pi pi-copy"
               class="p-button-sm p-button-outlined"
               @click="copyAllCommands"
@@ -108,12 +134,19 @@ import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import Dialog from 'primevue/dialog'
 import Toast from 'primevue/toast'
+import Tag from 'primevue/tag'
 import CodeBlock from './CodeBlock.vue'
+
+interface StructuredCommand {
+  type: string
+  command: string
+  description?: string
+}
 
 const props = defineProps<{
   evidence?: string
   verification?: string
-  commands?: string[]
+  commands?: StructuredCommand[]
   fridaScript?: string
   screenshotPath?: string
 }>()
@@ -137,6 +170,49 @@ const verificationSteps = computed(() => {
     })
 })
 
+// Parse structured evidence (JSON array)
+const parsedEvidence = computed(() => {
+  if (!props.evidence) return null
+  const trimmed = props.evidence.trim()
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
+        return parsed
+      }
+    } catch {
+      // Not valid JSON array
+    }
+  }
+  return null
+})
+
+// Get columns from parsed evidence
+const evidenceColumns = computed(() => {
+  if (!parsedEvidence.value || parsedEvidence.value.length === 0) return []
+  // Get keys from first item, with preferred order
+  const preferredOrder = ['package', 'name', 'version', 'description', 'type', 'severity', 'file', 'path', 'line']
+  const allKeys = Object.keys(parsedEvidence.value[0])
+  return allKeys.sort((a, b) => {
+    const aIdx = preferredOrder.indexOf(a)
+    const bIdx = preferredOrder.indexOf(b)
+    if (aIdx === -1 && bIdx === -1) return 0
+    if (aIdx === -1) return 1
+    if (bIdx === -1) return -1
+    return aIdx - bIdx
+  })
+})
+
+function formatColumnHeader(col: string): string {
+  return col.charAt(0).toUpperCase() + col.slice(1).replace(/_/g, ' ')
+}
+
+function getColumnClass(col: string): string {
+  if (col === 'package' || col === 'name' || col === 'path' || col === 'file') return 'col-mono'
+  if (col === 'version') return 'col-version'
+  return ''
+}
+
 // Screenshot URL (assuming API serves screenshots)
 const screenshotUrl = computed(() => {
   if (!props.screenshotPath) return ''
@@ -147,6 +223,58 @@ const screenshotUrl = computed(() => {
   // Otherwise, construct API URL
   return `/api/screenshots/${encodeURIComponent(props.screenshotPath)}`
 })
+
+function getCommandSeverity(type: string): string {
+  const severityMap: Record<string, string> = {
+    adb: 'success',
+    frida: 'warning',
+    bash: 'info',
+    drozer: 'warning',
+    objection: 'warning',
+    android: 'success',
+    ios: 'secondary',
+  }
+  return severityMap[type.toLowerCase()] || 'secondary'
+}
+
+function detectEvidenceLanguage(text: string): string {
+  if (!text) return 'plaintext'
+  const trimmed = text.trim()
+  // Check if JSON
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      JSON.parse(trimmed)
+      return 'json'
+    } catch {
+      // Not valid JSON
+    }
+  }
+  // Check if XML
+  if (trimmed.startsWith('<') && trimmed.includes('>')) {
+    return 'xml'
+  }
+  return 'plaintext'
+}
+
+function isCodeEvidence(text: string): boolean {
+  if (!text) return false
+  const trimmed = text.trim()
+  // Only use code block for JSON or XML
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      JSON.parse(trimmed)
+      return true
+    } catch {
+      // Not valid JSON
+    }
+  }
+  if (trimmed.startsWith('<') && trimmed.includes('>')) {
+    return true
+  }
+  return false
+}
 
 function copyCommand(cmd: string) {
   navigator.clipboard.writeText(cmd)
@@ -160,7 +288,7 @@ function copyCommand(cmd: string) {
 
 function copyAllCommands() {
   if (!props.commands) return
-  const allCommands = props.commands.join('\n')
+  const allCommands = props.commands.map((cmd) => cmd.command).join('\n')
   navigator.clipboard.writeText(allCommands)
   toast.add({
     severity: 'success',
@@ -201,16 +329,73 @@ function openLightbox() {
 }
 
 .evidence-content {
-  padding: 1rem;
-  background: var(--surface-ground);
+  padding: 0;
   border-radius: 8px;
+  overflow: hidden;
 }
 
 .evidence-text {
+  margin: 0;
+  padding: 1rem;
   white-space: pre-wrap;
-  line-height: 1.6;
-  font-family: monospace;
-  font-size: 0.9rem;
+  line-height: 1.7;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.875rem;
+  background: var(--surface-ground);
+  color: var(--text-color);
+  border-radius: 8px;
+  border: 1px solid var(--surface-border);
+}
+
+.evidence-table-container {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--surface-border);
+}
+
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.evidence-table thead {
+  background: var(--surface-100);
+}
+
+.evidence-table th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-color-secondary);
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.evidence-table td {
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--surface-border);
+  color: var(--text-color);
+}
+
+.evidence-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.evidence-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.evidence-table .col-mono {
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.8125rem;
+}
+
+.evidence-table .col-version {
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-weight: 500;
+  color: var(--primary-color);
 }
 
 .verification-content {
@@ -254,31 +439,71 @@ function openLightbox() {
 .commands-content {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 1rem;
 }
 
-.command-item {
+.command-block {
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e1e1e;
+  border: 1px solid #3d3d3d;
+}
+
+.command-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.command-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1rem;
-  background: #1e1e1e;
-  border-radius: 6px;
+  gap: 0.75rem;
 }
 
-.command-text {
+.command-type-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.command-desc {
+  color: #9ca3af;
+  font-size: 0.8rem;
+}
+
+.command-code {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background: #1e1e1e;
+}
+
+.command-code code {
   color: #4ec9b0;
-  font-size: 0.85rem;
-  font-family: 'Fira Code', 'Monaco', monospace;
-  word-break: break-all;
+  background: transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copy-btn {
+  color: #888 !important;
+}
+
+.copy-btn:hover {
+  color: #fff !important;
 }
 
 .copy-all-section {
   display: flex;
   justify-content: flex-end;
-  margin-top: 0.5rem;
   padding-top: 0.5rem;
-  border-top: 1px solid var(--surface-border);
 }
 
 .frida-content {

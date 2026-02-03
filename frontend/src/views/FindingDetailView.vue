@@ -118,10 +118,16 @@
           <div class="remediation-content">{{ finding.remediation }}</div>
           <div v-if="finding.remediation_commands?.length" class="remediation-section">
             <h4>Fix Commands</h4>
-            <div class="command-list">
-              <div v-for="(cmd, index) in finding.remediation_commands" :key="index" class="command-item">
-                <code>{{ cmd }}</code>
-                <Button icon="pi pi-copy" class="p-button-sm p-button-text" @click="copyToClipboard(cmd)" />
+            <div class="commands-list">
+              <div v-for="(cmd, index) in finding.remediation_commands" :key="index" class="command-block">
+                <div class="command-block-header">
+                  <div class="command-meta">
+                    <Tag v-if="cmd.type" :value="cmd.type" severity="secondary" class="command-type-tag" />
+                    <span v-if="cmd.description" class="command-desc">{{ cmd.description }}</span>
+                  </div>
+                  <Button icon="pi pi-copy" class="p-button-sm p-button-text copy-btn" @click="copyToClipboard(cmd.command)" v-tooltip.top="'Copy'" />
+                </div>
+                <pre class="command-code"><code>{{ cmd.command }}</code></pre>
               </div>
             </div>
           </div>
@@ -137,7 +143,8 @@
             <h4>Resources</h4>
             <ul class="resource-list">
               <li v-for="(resource, index) in finding.remediation_resources" :key="index">
-                <a :href="resource" target="_blank">{{ resource }}</a>
+                <Tag v-if="resource.type" :value="resource.type" severity="info" class="resource-type-tag" />
+                <a :href="resource.url" target="_blank" rel="noopener">{{ resource.title }}</a>
               </li>
             </ul>
           </div>
@@ -451,24 +458,68 @@ onMounted(async () => {
   white-space: pre-wrap;
 }
 
-.command-list {
+.commands-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 1rem;
 }
 
-.command-item {
+.command-block {
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e1e1e;
+  border: 1px solid #3d3d3d;
+}
+
+.command-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.command-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem;
-  background: #1e1e1e;
-  border-radius: 4px;
+  gap: 0.75rem;
 }
 
-.command-item code {
+.command-type-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.command-desc {
+  color: #9ca3af;
+  font-size: 0.8rem;
+}
+
+.command-code {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background: #1e1e1e;
+}
+
+.command-code code {
   color: #4ec9b0;
-  font-size: 0.85rem;
+  background: transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copy-btn {
+  color: #888 !important;
+}
+
+.copy-btn:hover {
+  color: #fff !important;
 }
 
 .frida-script {

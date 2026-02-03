@@ -9,6 +9,27 @@ from pydantic import BaseModel, Field
 
 
 # ============================================================================
+# Remediation Schemas (Nubicustos Parity)
+# ============================================================================
+
+
+class RemediationCommand(BaseModel):
+    """Structured remediation command."""
+
+    type: str  # adb, frida, bash, android, ios, objection, drozer
+    command: str
+    description: str | None = None
+
+
+class RemediationResource(BaseModel):
+    """Structured remediation resource link."""
+
+    title: str
+    url: str
+    type: str  # documentation, blog, video, github, tool
+
+
+# ============================================================================
 # Mobile App Schemas
 # ============================================================================
 
@@ -122,13 +143,14 @@ class FindingCreate(FindingBase):
     # PoC Evidence
     poc_evidence: str | None = None
     poc_verification: str | None = None
-    poc_commands: list[str] = []
+    poc_commands: list[dict[str, Any]] = []  # [{type, command, description}]
     poc_frida_script: str | None = None
+    poc_screenshot_path: str | None = None
 
-    # Remediation Details
-    remediation_commands: list[str] = []
-    remediation_code: dict[str, Any] = {}
-    remediation_resources: list[str] = []
+    # Remediation Details - structured for Nubicustos parity
+    remediation_commands: list[dict[str, Any]] = []  # [{type, command, description}]
+    remediation_code: dict[str, Any] = {}  # {language: code_snippet}
+    remediation_resources: list[dict[str, Any]] = []  # [{title, url, type}]
 
     # Risk Scoring
     risk_score: Decimal | None = None
@@ -141,6 +163,10 @@ class FindingCreate(FindingBase):
     owasp_masvs_category: str | None = None
     owasp_masvs_control: str | None = None
     owasp_mastg_test: str | None = None
+
+    # Deduplication
+    canonical_id: str | None = None
+    tool_sources: list[str] = []
 
 
 class FindingResponse(FindingBase):
@@ -160,14 +186,14 @@ class FindingResponse(FindingBase):
     # PoC Evidence
     poc_evidence: str | None = None
     poc_verification: str | None = None
-    poc_commands: list[str] = []
+    poc_commands: list[dict[str, Any]] = []  # [{type, command, description}]
     poc_frida_script: str | None = None
     poc_screenshot_path: str | None = None
 
-    # Remediation Details
-    remediation_commands: list[str] = []
-    remediation_code: dict[str, Any] = {}
-    remediation_resources: list[str] = []
+    # Remediation Details - structured for Nubicustos parity
+    remediation_commands: list[dict[str, Any]] = []  # [{type, command, description}]
+    remediation_code: dict[str, Any] = {}  # {language: code_snippet}
+    remediation_resources: list[dict[str, Any]] = []  # [{title, url, type}]
 
     # Risk Scoring
     risk_score: Decimal | None = None

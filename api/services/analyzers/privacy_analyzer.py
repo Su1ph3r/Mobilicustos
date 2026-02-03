@@ -543,7 +543,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
                 description=f"The following {category} SDKs were detected:\n\n{tracker_list}",
                 severity=severity,
                 category="Privacy - Tracking",
-                impact=f"These SDKs collect user data including: {', '.join(list(all_data)[:5])}. This may require user consent under GDPR/CCPA.",
+                impact=f"These SDKs collect user data including: {', '.join(sorted(all_data))}. This may require user consent under GDPR/CCPA.",
                 remediation="1. Document all tracking in privacy policy\n2. Implement consent management platform\n3. Provide opt-out mechanism\n4. Review data sharing agreements with vendors",
                 cwe_id="CWE-359",
                 cwe_name="Exposure of Private Personal Information",
@@ -563,10 +563,23 @@ class PrivacyAnalyzer(BaseAnalyzer):
         """Create finding for PII handling."""
         files_with_pii = list(set(f["file_path"] for f in pii_findings))
 
+        # Group PII by type for better clarity
+        pii_types = {}
+        for f in pii_findings:
+            pii_type = f.get("pii_type", "unknown")
+            if pii_type not in pii_types:
+                pii_types[pii_type] = []
+            pii_types[pii_type].append(f["file_path"])
+
+        pii_summary = "\n".join([
+            f"• {pii_type}: {len(set(files))} file(s)"
+            for pii_type, files in sorted(pii_types.items())
+        ])
+
         return AnalyzerResult(
             title=f"PII Handling Detected in {len(files_with_pii)} Files",
-            description=f"Variables and patterns suggesting PII (Personally Identifiable Information) handling were found in:\n\n" +
-                       "\n".join([f"- {f}" for f in files_with_pii[:10]]),
+            description=f"PII (Personally Identifiable Information) handling patterns detected:\n\n{pii_summary}\n\nAffected files:\n" +
+                       "\n".join([f"- {f}" for f in files_with_pii]),
             severity="medium",
             category="Privacy - PII",
             impact="PII requires special handling under privacy regulations. Improper storage or transmission of PII can lead to data breaches and regulatory fines.",

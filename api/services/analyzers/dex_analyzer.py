@@ -99,11 +99,33 @@ class DexAnalyzer(BaseAnalyzer):
                                 poc_evidence=f"Weak algorithm {algo} found in {method.get_class_name()}.{method_name}()",
                                 poc_verification=f"1. Decompile APK: jadx -d output app.apk\n2. Open: output/{class_path}\n3. Search for: {algo}",
                                 poc_commands=[
-                                    f"jadx -d /tmp/out {app.file_path}",
-                                    f"grep -rn '{algo}' /tmp/out/",
+                                    {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path}", "description": "Decompile APK with jadx"},
+                                    {"type": "bash", "command": f"grep -rn '{algo}' /tmp/out/", "description": f"Search for {algo} usage"},
                                 ],
+                                poc_frida_script=f'''Java.perform(function() {{
+    var Cipher = Java.use('javax.crypto.Cipher');
+    Cipher.getInstance.overload('java.lang.String').implementation = function(algo) {{
+        console.log("[*] Cipher.getInstance: " + algo);
+        if (algo.indexOf("{algo}") !== -1) {{
+            console.log("[!] WEAK ALGORITHM DETECTED: " + algo);
+        }}
+        return this.getInstance(algo);
+    }};
+}});''',
                                 cwe_id="CWE-327",
+                                cwe_name="Use of a Broken or Risky Cryptographic Algorithm",
+                                cvss_score=7.5 if algo in ("DES", "RC4", "ECB") else 5.3,
+                                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" if algo in ("DES", "RC4", "ECB") else "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                                 owasp_masvs_category="MASVS-CRYPTO",
+                                owasp_masvs_control="MSTG-CRYPTO-4",
+                                owasp_mastg_test="MASTG-TEST-0014",
+                                remediation_code={
+                                    "java": 'Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");',
+                                    "kotlin": 'val cipher = Cipher.getInstance("AES/GCM/NoPadding")',
+                                },
+                                remediation_resources=[
+                                    {"title": "OWASP MASTG - Testing for Insecure Cryptographic Algorithms", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0014/", "type": "documentation"},
+                                ],
                             ))
 
         return findings
@@ -147,12 +169,36 @@ class DexAnalyzer(BaseAnalyzer):
                 poc_evidence=f"Found {log_count} Log.* calls across the application",
                 poc_verification="1. Connect device via ADB\n2. Run: adb logcat | grep <package_name>\n3. Trigger app functionality\n4. Review logged data",
                 poc_commands=[
-                    "adb logcat -d | grep -i password",
-                    "adb logcat -d | grep -i token",
-                    "adb logcat -d | grep -i key",
+                    {"type": "adb", "command": "adb logcat -d | grep -i password", "description": "Search logs for passwords"},
+                    {"type": "adb", "command": "adb logcat -d | grep -i token", "description": "Search logs for tokens"},
+                    {"type": "adb", "command": "adb logcat -d | grep -i key", "description": "Search logs for keys"},
                 ],
+                poc_frida_script='''Java.perform(function() {
+    var Log = Java.use('android.util.Log');
+    ['v', 'd', 'i', 'w', 'e'].forEach(function(level) {
+        Log[level].overload('java.lang.String', 'java.lang.String').implementation = function(tag, msg) {
+            console.log("[LOG/" + level.toUpperCase() + "] " + tag + ": " + msg);
+            return this[level](tag, msg);
+        };
+    });
+});''',
                 cwe_id="CWE-532",
+                cwe_name="Insertion of Sensitive Information into Log File",
+                cvss_score=3.3,
+                cvss_vector="CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N",
                 owasp_masvs_category="MASVS-STORAGE",
+                owasp_masvs_control="MSTG-STORAGE-3",
+                owasp_mastg_test="MASTG-TEST-0003",
+                remediation_code={
+                    "proguard": '''-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+    public static *** i(...);
+}'''
+                },
+                remediation_resources=[
+                    {"title": "OWASP MASTG - Testing Logs for Sensitive Data", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0003/", "type": "documentation"},
+                ],
             ))
 
         return findings
@@ -197,12 +243,34 @@ class DexAnalyzer(BaseAnalyzer):
                             poc_evidence=f"WebView {issue_method}() call found in {method.get_class_name()}",
                             poc_verification=f"1. Decompile APK: jadx -d output app.apk\n2. Search for WebView usage\n3. Verify {issue_method} configuration",
                             poc_commands=[
-                                f"jadx -d /tmp/out {app.file_path}",
-                                f"grep -rn '{issue_method}' /tmp/out/",
-                                "grep -rn 'WebView' /tmp/out/",
+                                {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path}", "description": "Decompile APK"},
+                                {"type": "bash", "command": f"grep -rn '{issue_method}' /tmp/out/", "description": f"Search for {issue_method}"},
+                                {"type": "bash", "command": "grep -rn 'WebView' /tmp/out/", "description": "Find all WebView usage"},
                             ],
+                            poc_frida_script='''Java.perform(function() {
+    var WebSettings = Java.use('android.webkit.WebSettings');
+    WebSettings.setJavaScriptEnabled.implementation = function(enabled) {
+        console.log("[*] setJavaScriptEnabled: " + enabled);
+        return this.setJavaScriptEnabled(enabled);
+    };
+
+    var WebView = Java.use('android.webkit.WebView');
+    WebView.addJavascriptInterface.implementation = function(obj, name) {
+        console.log("[!] addJavascriptInterface: " + name);
+        console.log("    Object class: " + obj.$className);
+        return this.addJavascriptInterface(obj, name);
+    };
+});''',
                             cwe_id="CWE-749",
+                            cwe_name="Exposed Dangerous Method or Function",
+                            cvss_score=7.5 if severity == "high" else 5.3,
+                            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" if severity == "high" else "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                             owasp_masvs_category="MASVS-PLATFORM",
+                            owasp_masvs_control="MSTG-PLATFORM-7",
+                            owasp_mastg_test="MASTG-TEST-0031",
+                            remediation_resources=[
+                                {"title": "OWASP MASTG - Testing WebView Protocol Handlers", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0031/", "type": "documentation"},
+                            ],
                         ))
 
         return findings
@@ -243,12 +311,42 @@ class DexAnalyzer(BaseAnalyzer):
                             poc_evidence=f"Raw SQL method {raw_method}() found in {method.get_class_name()}",
                             poc_verification=f"1. Decompile APK: jadx -d output app.apk\n2. Open: output/{class_path}\n3. Search for {raw_method} calls\n4. Check if user input is concatenated",
                             poc_commands=[
-                                f"jadx -d /tmp/out {app.file_path}",
-                                f"grep -rn '{raw_method}' /tmp/out/",
-                                "grep -rn 'SELECT.*+' /tmp/out/",
+                                {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path}", "description": "Decompile APK"},
+                                {"type": "bash", "command": f"grep -rn '{raw_method}' /tmp/out/", "description": f"Find {raw_method} calls"},
+                                {"type": "bash", "command": "grep -rn 'SELECT.*+' /tmp/out/", "description": "Find string concatenation in SQL"},
                             ],
+                            poc_frida_script='''Java.perform(function() {
+    var SQLiteDatabase = Java.use('android.database.sqlite.SQLiteDatabase');
+    SQLiteDatabase.rawQuery.overload('java.lang.String', '[Ljava.lang.String;').implementation = function(sql, args) {
+        console.log("[*] rawQuery: " + sql);
+        if (args) {
+            console.log("    Args: " + args.join(", "));
+        }
+        return this.rawQuery(sql, args);
+    };
+
+    SQLiteDatabase.execSQL.overload('java.lang.String').implementation = function(sql) {
+        console.log("[*] execSQL: " + sql);
+        return this.execSQL(sql);
+    };
+});''',
                             cwe_id="CWE-89",
+                            cwe_name="SQL Injection",
+                            cvss_score=8.6,
+                            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L",
                             owasp_masvs_category="MASVS-CODE",
+                            owasp_masvs_control="MSTG-CODE-6",
+                            owasp_mastg_test="MASTG-TEST-0025",
+                            remediation_code={
+                                "java": '''// Use parameterized queries
+String[] args = {userInput};
+Cursor cursor = db.rawQuery("SELECT * FROM users WHERE id=?", args);''',
+                                "kotlin": '''// Use parameterized queries
+val cursor = db.rawQuery("SELECT * FROM users WHERE id=?", arrayOf(userInput))'''
+                            },
+                            remediation_resources=[
+                                {"title": "OWASP MASTG - Testing for SQL Injection", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CODE/MASTG-TEST-0025/", "type": "documentation"},
+                            ],
                         ))
 
         return findings
@@ -292,12 +390,35 @@ class DexAnalyzer(BaseAnalyzer):
                             poc_evidence=f"Insecure file mode {mode} found in {method.get_class_name()}",
                             poc_verification=f"1. Decompile APK: jadx -d output app.apk\n2. Open: output/{class_path}\n3. Search for {mode}\n4. Check file operations",
                             poc_commands=[
-                                f"jadx -d /tmp/out {app.file_path}",
-                                f"grep -rn '{mode}' /tmp/out/",
-                                "adb shell run-as <package> ls -la /data/data/<package>/files/",
+                                {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path}", "description": "Decompile APK"},
+                                {"type": "bash", "command": f"grep -rn '{mode}' /tmp/out/", "description": f"Search for {mode} usage"},
+                                {"type": "adb", "command": f"adb shell run-as {app.package_name} ls -la /data/data/{app.package_name}/files/", "description": "List app files with permissions"},
                             ],
+                            poc_frida_script='''Java.perform(function() {
+    var Context = Java.use('android.content.Context');
+    Context.openFileOutput.overload('java.lang.String', 'int').implementation = function(name, mode) {
+        var modeStr = "";
+        if (mode == 0) modeStr = "MODE_PRIVATE";
+        else if (mode == 1) modeStr = "MODE_WORLD_READABLE";
+        else if (mode == 2) modeStr = "MODE_WORLD_WRITEABLE";
+        console.log("[*] openFileOutput: " + name + " mode=" + modeStr);
+        return this.openFileOutput(name, mode);
+    };
+});''',
                             cwe_id="CWE-732",
+                            cwe_name="Incorrect Permission Assignment for Critical Resource",
+                            cvss_score=7.5,
+                            cvss_vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
                             owasp_masvs_category="MASVS-STORAGE",
+                            owasp_masvs_control="MSTG-STORAGE-2",
+                            owasp_mastg_test="MASTG-TEST-0002",
+                            remediation_code={
+                                "java": 'FileOutputStream fos = openFileOutput("data.txt", Context.MODE_PRIVATE);',
+                                "kotlin": 'val fos = openFileOutput("data.txt", Context.MODE_PRIVATE)'
+                            },
+                            remediation_resources=[
+                                {"title": "OWASP MASTG - Testing Local Storage for Sensitive Data", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0002/", "type": "documentation"},
+                            ],
                         ))
 
         return findings
@@ -345,12 +466,23 @@ class DexAnalyzer(BaseAnalyzer):
                                         poc_evidence=f"Weak crypto pattern '{match}' found in {name}",
                                         poc_verification=f"1. Decompile APK: jadx -d output app.apk\n2. Search for: {match}\n3. Verify algorithm usage in context",
                                         poc_commands=[
-                                            f"jadx -d /tmp/out {app.file_path}",
-                                            f"grep -rn '{match}' /tmp/out/",
-                                            "strings /tmp/out/classes*.dex | grep -i cipher",
+                                            {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path}", "description": "Decompile APK"},
+                                            {"type": "bash", "command": f"grep -rn '{match}' /tmp/out/", "description": f"Search for {match}"},
+                                            {"type": "bash", "command": "strings /tmp/out/classes*.dex | grep -i cipher", "description": "Extract cipher strings from DEX"},
                                         ],
                                         cwe_id="CWE-327",
+                                        cwe_name="Use of a Broken or Risky Cryptographic Algorithm",
+                                        cvss_score=7.5 if severity == "high" else 5.3,
+                                        cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" if severity == "high" else "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                                         owasp_masvs_category="MASVS-CRYPTO",
+                                        owasp_masvs_control="MSTG-CRYPTO-4",
+                                        owasp_mastg_test="MASTG-TEST-0014",
+                                        remediation_code={
+                                            "java": 'Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");',
+                                        },
+                                        remediation_resources=[
+                                            {"title": "OWASP MASTG - Testing for Insecure Cryptographic Algorithms", "url": "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0014/", "type": "documentation"},
+                                        ],
                                     ))
 
         except Exception as e:

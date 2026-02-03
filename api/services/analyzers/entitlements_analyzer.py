@@ -645,8 +645,9 @@ class EntitlementsAnalyzer(BaseAnalyzer):
                 severity="medium",
                 category="Entitlements",
                 description=(
-                    f"The application has {len(enabled_sensitive)} sensitive capabilities enabled: "
-                    f"{', '.join(enabled_sensitive[:5])}. This increases the attack surface."
+                    f"The application has {len(enabled_sensitive)} sensitive capabilities enabled:\n\n"
+                    f"{chr(10).join(f'• {cap}' for cap in enabled_sensitive)}\n\n"
+                    f"This increases the attack surface."
                 ),
                 impact=(
                     "Each additional capability increases the potential attack vectors. "
