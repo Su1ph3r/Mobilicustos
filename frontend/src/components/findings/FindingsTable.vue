@@ -315,14 +315,14 @@ const onSort = (event: { sortField: string; sortOrder: number }) => {
   color: #6b7280;
 }
 
-.status-badge.mitigated {
+.status-badge.remediated {
   background: rgba(59, 130, 246, 0.1);
-  color: var(--status-mitigated);
+  color: var(--status-remediated);
 }
 
-.status-badge.accepted {
+.status-badge.accepted_risk {
   background: rgba(139, 92, 246, 0.1);
-  color: var(--status-accepted);
+  color: var(--status-accepted_risk);
 }
 
 .platform-badge {

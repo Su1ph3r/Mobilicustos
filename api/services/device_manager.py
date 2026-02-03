@@ -12,6 +12,28 @@ from api.models.database import Device
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Regex pattern for valid device IDs (alphanumeric, dots, colons, hyphens, underscores)
+VALID_DEVICE_ID_PATTERN = re.compile(r'^[a-zA-Z0-9.:_-]+$')
+
+
+def _validate_device_id(device_id: str) -> str:
+    """Validate device ID to prevent command injection.
+
+    Args:
+        device_id: Device identifier string
+
+    Returns:
+        Validated device ID
+
+    Raises:
+        ValueError: If device ID contains invalid characters
+    """
+    if not device_id or len(device_id) > 128:
+        raise ValueError("Invalid device ID length")
+    if not VALID_DEVICE_ID_PATTERN.match(device_id):
+        raise ValueError(f"Invalid device ID format: {device_id}")
+    return device_id
+
 
 class DeviceManager:
     """Manages Android and iOS device connections."""
@@ -50,6 +72,9 @@ class DeviceManager:
 
     async def _get_android_device_info(self, device_id: str) -> dict[str, Any]:
         """Get detailed info for an Android device."""
+        # Validate device_id to prevent command injection
+        device_id = _validate_device_id(device_id)
+
         info = {
             "device_id": device_id,
             "device_type": "physical",
@@ -156,6 +181,9 @@ class DeviceManager:
 
     async def _get_ios_device_info(self, device_id: str) -> dict[str, Any]:
         """Get detailed info for an iOS device."""
+        # Validate device_id to prevent command injection
+        device_id = _validate_device_id(device_id)
+
         info = {
             "device_id": device_id,
             "device_type": "physical",
@@ -204,6 +232,9 @@ class DeviceManager:
     async def _connect_android(self, device: Device) -> bool:
         """Connect to an Android device."""
         try:
+            # Validate device_id to prevent command injection
+            device_id = _validate_device_id(device.device_id)
+
             if device.device_type == "corellium":
                 # Would use Corellium API
                 raise NotImplementedError("Corellium connection not implemented")
@@ -211,7 +242,7 @@ class DeviceManager:
             # For physical/emulator, just verify connection
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "-s", device.device_id, "get-state"],
+                ["adb", "-s", device_id, "get-state"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -226,9 +257,12 @@ class DeviceManager:
     async def _connect_ios(self, device: Device) -> bool:
         """Connect to an iOS device."""
         try:
+            # Validate device_id to prevent command injection
+            device_id = _validate_device_id(device.device_id)
+
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["ideviceinfo", "-u", device.device_id],
+                ["ideviceinfo", "-u", device_id],
                 capture_output=True,
                 timeout=5,
             )
@@ -250,10 +284,13 @@ class DeviceManager:
 
     async def _install_frida_android(self, device: Device, version: str) -> str:
         """Install Frida server on Android."""
+        # Validate device_id to prevent command injection
+        device_id = _validate_device_id(device.device_id)
+
         # Get architecture
         result = await asyncio.to_thread(
             subprocess.run,
-            ["adb", "-s", device.device_id, "shell", "getprop", "ro.product.cpu.abi"],
+            ["adb", "-s", device_id, "shell", "getprop", "ro.product.cpu.abi"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -290,10 +327,13 @@ class DeviceManager:
             return True
 
         try:
+            # Validate device_id to prevent command injection
+            device_id = _validate_device_id(device.device_id)
+
             # Kill existing server
             await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "-s", device.device_id, "shell", "pkill", "-f", "frida-server"],
+                ["adb", "-s", device_id, "shell", "pkill", "-f", "frida-server"],
                 capture_output=True,
                 timeout=5,
             )
@@ -301,7 +341,7 @@ class DeviceManager:
             # Start server in background
             await asyncio.to_thread(
                 subprocess.Popen,
-                ["adb", "-s", device.device_id, "shell", "/data/local/tmp/frida-server", "&"],
+                ["adb", "-s", device_id, "shell", "/data/local/tmp/frida-server", "&"],
             )
 
             # Wait briefly and verify
@@ -309,7 +349,7 @@ class DeviceManager:
 
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "-s", device.device_id, "shell", "pgrep", "-f", "frida-server"],
+                ["adb", "-s", device_id, "shell", "pgrep", "-f", "frida-server"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -323,10 +363,13 @@ class DeviceManager:
 
     async def install_app(self, device: Device, app_path: str) -> bool:
         """Install an app on a device."""
+        # Validate device_id to prevent command injection
+        device_id = _validate_device_id(device.device_id)
+
         if device.platform == "android":
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["adb", "-s", device.device_id, "install", "-r", app_path],
+                ["adb", "-s", device_id, "install", "-r", app_path],
                 capture_output=True,
                 timeout=120,
             )
@@ -334,7 +377,7 @@ class DeviceManager:
         elif device.platform == "ios":
             result = await asyncio.to_thread(
                 subprocess.run,
-                ["ideviceinstaller", "-u", device.device_id, "-i", app_path],
+                ["ideviceinstaller", "-u", device_id, "-i", app_path],
                 capture_output=True,
                 timeout=120,
             )
@@ -344,11 +387,18 @@ class DeviceManager:
 
     async def launch_app(self, device: Device, package_name: str) -> bool:
         """Launch an app on a device."""
+        # Validate device_id to prevent command injection
+        device_id = _validate_device_id(device.device_id)
+
+        # Validate package_name (alphanumeric with dots and underscores only)
+        if not re.match(r'^[a-zA-Z0-9._]+$', package_name):
+            raise ValueError(f"Invalid package name format: {package_name}")
+
         if device.platform == "android":
             result = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    "adb", "-s", device.device_id, "shell",
+                    "adb", "-s", device_id, "shell",
                     "monkey", "-p", package_name, "-c",
                     "android.intent.category.LAUNCHER", "1"
                 ],

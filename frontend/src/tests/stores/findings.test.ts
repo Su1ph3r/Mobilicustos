@@ -176,7 +176,7 @@ describe('Findings Store', () => {
       const mockSummary = {
         total: 100,
         by_severity: { critical: 5, high: 20, medium: 40, low: 30, info: 5 },
-        by_status: { open: 80, confirmed: 10, mitigated: 10 },
+        by_status: { open: 80, confirmed: 10, remediated: 10 },
         by_category: { 'Storage': 30, 'Network': 25 },
         by_masvs: { 'MASVS-STORAGE': 30, 'MASVS-NETWORK': 25 },
         by_tool: { manifest_analyzer: 50, secret_scanner: 50 },
@@ -222,9 +222,9 @@ describe('Findings Store', () => {
       const store = useFindingsStore()
       store.currentFinding = { finding_id: 'f1', status: 'open' } as any
 
-      await store.updateStatus('f1', 'mitigated')
+      await store.updateStatus('f1', 'remediated')
 
-      expect(store.currentFinding!.status).toBe('mitigated')
+      expect(store.currentFinding!.status).toBe('remediated')
     })
   })
 

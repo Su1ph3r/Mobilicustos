@@ -91,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useFindingsStore } from '@/stores/findings'
 import MultiSelect from 'primevue/multiselect'
 import Dropdown from 'primevue/dropdown'
@@ -120,7 +120,15 @@ const selectedMasvs = ref<string | null>(
 )
 
 // Debounce timer
-let searchDebounceTimer: number | null = null
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+// Cleanup debounce timer on unmount
+onUnmounted(() => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+})
 
 // Quick filter buttons
 const severityQuickFilters = [
@@ -143,8 +151,8 @@ const statusOptions = [
   { label: 'Open', value: 'open' },
   { label: 'Confirmed', value: 'confirmed' },
   { label: 'False Positive', value: 'false_positive' },
-  { label: 'Mitigated', value: 'mitigated' },
-  { label: 'Accepted', value: 'accepted' },
+  { label: 'Accepted Risk', value: 'accepted_risk' },
+  { label: 'Remediated', value: 'remediated' },
 ]
 
 const toolOptions = computed(() => {
@@ -166,7 +174,7 @@ const getSeverityCount = (severity: string): number => {
 // Handlers
 const handleSearchDebounced = () => {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-  searchDebounceTimer = window.setTimeout(() => {
+  searchDebounceTimer = setTimeout(() => {
     findingsStore.setFilters({ search: searchQuery.value || null })
     emit('filter-change')
   }, 300)

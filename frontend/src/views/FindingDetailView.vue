@@ -216,7 +216,7 @@ const toast = useToast()
 const loading = ref(true)
 
 const finding = computed(() => findingsStore.currentFinding)
-const statusOptions = ['open', 'confirmed', 'false_positive', 'mitigated', 'accepted']
+const statusOptions = ['open', 'confirmed', 'false_positive', 'accepted_risk', 'remediated']
 
 // Check if there's any PoC data to display
 const hasPocData = computed(() => {

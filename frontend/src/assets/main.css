@@ -43,9 +43,10 @@
 
   /* Status colors */
   --status-open: #ef4444;
-  --status-closed: #22c55e;
-  --status-mitigated: #3b82f6;
-  --status-accepted: #8b5cf6;
+  --status-confirmed: #f97316;
+  --status-false_positive: #6b7280;
+  --status-remediated: #3b82f6;
+  --status-accepted_risk: #8b5cf6;
 
   /* Additional theme variables */
   --bg-primary: #ffffff;
