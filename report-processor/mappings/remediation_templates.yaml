@@ -1,0 +1,168 @@
+# Remediation templates for common finding types
+# Provides platform-specific guidance
+
+insecure_data_storage:
+  android:
+    description: |
+      Use Android's secure storage mechanisms instead of plaintext storage.
+      For sensitive data, use EncryptedSharedPreferences or the Android Keystore.
+    code:
+      kotlin: |
+        // Use EncryptedSharedPreferences
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+        val sharedPreferences = EncryptedSharedPreferences.create(
+            context,
+            "secret_prefs",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    commands:
+      - "adb shell run-as <package> cat shared_prefs/*.xml"
+    resources:
+      - "https://developer.android.com/topic/security/data"
+      - "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/"
+  ios:
+    description: |
+      Use iOS Keychain Services for sensitive data storage.
+      Never store secrets in UserDefaults, plist files, or unprotected databases.
+    code:
+      swift: |
+        // Store in Keychain
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "apiKey",
+            kSecValueData as String: secretData,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        SecItemAdd(query as CFDictionary, nil)
+    commands:
+      - "security dump-keychain"
+    resources:
+      - "https://developer.apple.com/documentation/security/keychain_services"
+      - "https://mas.owasp.org/MASTG/tests/ios/MASVS-STORAGE/"
+
+hardcoded_credentials:
+  general:
+    description: |
+      Remove hardcoded credentials from source code and binaries.
+      Use secure secret management solutions or runtime configuration.
+    code:
+      java: |
+        // BAD: Hardcoded credential
+        // String apiKey = "sk-1234567890abcdef";
+
+        // GOOD: Load from secure storage
+        String apiKey = BuildConfig.API_KEY; // From gradle.properties (not committed)
+        // Or use Android Keystore for runtime secrets
+    commands:
+      - "strings <binary> | grep -i 'api\\|key\\|secret\\|password'"
+    resources:
+      - "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"
+
+ssl_pinning:
+  android:
+    description: |
+      Implement certificate pinning to prevent MITM attacks.
+      Use OkHttp's CertificatePinner or Android's Network Security Config.
+    code:
+      kotlin: |
+        // Using Network Security Config (res/xml/network_security_config.xml)
+        // <?xml version="1.0" encoding="utf-8"?>
+        // <network-security-config>
+        //     <domain-config>
+        //         <domain includeSubdomains="true">api.example.com</domain>
+        //         <pin-set>
+        //             <pin digest="SHA-256">base64_encoded_pin</pin>
+        //         </pin-set>
+        //     </domain-config>
+        // </network-security-config>
+
+        // Or using OkHttp
+        val certificatePinner = CertificatePinner.Builder()
+            .add("api.example.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .build()
+    resources:
+      - "https://developer.android.com/training/articles/security-ssl"
+  ios:
+    description: |
+      Implement SSL pinning using URLSession or Alamofire's ServerTrustManager.
+    code:
+      swift: |
+        // Using Alamofire
+        let evaluators: [String: ServerTrustEvaluating] = [
+            "api.example.com": PinnedCertificatesTrustEvaluator()
+        ]
+        let manager = ServerTrustManager(evaluators: evaluators)
+    resources:
+      - "https://developer.apple.com/documentation/foundation/urlsessiondelegate"
+
+exported_components:
+  android:
+    description: |
+      Review exported components and add proper access controls.
+      Use android:exported="false" for components that don't need external access.
+    code:
+      xml: |
+        <!-- Secure: Not exported, internal use only -->
+        <activity
+            android:name=".InternalActivity"
+            android:exported="false" />
+
+        <!-- If exported is required, add permission protection -->
+        <activity
+            android:name=".SensitiveActivity"
+            android:exported="true"
+            android:permission="com.example.INTERNAL_PERMISSION" />
+    commands:
+      - "aapt dump xmltree <apk> AndroidManifest.xml | grep -A5 'activity\\|service\\|receiver\\|provider'"
+    resources:
+      - "https://developer.android.com/guide/topics/manifest/activity-element"
+
+debug_enabled:
+  android:
+    description: |
+      Disable debug mode in production builds.
+      Set android:debuggable="false" in the manifest or ensure release builds don't include debug flags.
+    code:
+      gradle: |
+        android {
+            buildTypes {
+                release {
+                    debuggable false
+                    minifyEnabled true
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+                }
+            }
+        }
+    commands:
+      - "aapt dump badging <apk> | grep -i debug"
+    resources:
+      - "https://developer.android.com/studio/build/shrink-code"
+  ios:
+    description: |
+      Ensure production builds don't include debug symbols or logging.
+      Use proper build configurations for release.
+    resources:
+      - "https://developer.apple.com/documentation/xcode/build-settings-reference"
+
+weak_crypto:
+  general:
+    description: |
+      Replace weak cryptographic algorithms with modern, secure alternatives.
+      Use AES-256-GCM for symmetric encryption and RSA-OAEP or ECDSA for asymmetric operations.
+    code:
+      java: |
+        // BAD: Weak algorithms
+        // Cipher.getInstance("DES");
+        // Cipher.getInstance("AES/ECB/PKCS5Padding");
+
+        // GOOD: Strong algorithms
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(256);
+    resources:
+      - "https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html"

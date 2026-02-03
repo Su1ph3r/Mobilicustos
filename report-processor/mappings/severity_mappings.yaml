@@ -1,0 +1,48 @@
+# Severity normalization mappings
+# Maps tool-specific severity values to standard levels
+
+critical:
+  - critical
+  - urgent
+  - severity1
+  - blocker
+  - p0
+  - "10"
+  - "9"
+
+high:
+  - high
+  - severe
+  - severity2
+  - major
+  - p1
+  - "8"
+  - "7"
+
+medium:
+  - medium
+  - moderate
+  - severity3
+  - normal
+  - p2
+  - "6"
+  - "5"
+  - "4"
+
+low:
+  - low
+  - minor
+  - severity4
+  - p3
+  - "3"
+  - "2"
+
+info:
+  - info
+  - informational
+  - note
+  - severity5
+  - trivial
+  - p4
+  - "1"
+  - "0"

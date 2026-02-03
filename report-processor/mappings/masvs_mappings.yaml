@@ -1,0 +1,145 @@
+# OWASP MASVS/MASTG Mappings for Mobilicustos
+# Maps finding categories to OWASP Mobile Application Security controls
+
+# Storage
+insecure_data_storage:
+  category: MASVS-STORAGE
+  control: MASVS-STORAGE-1
+  test: MASTG-TEST-0001
+
+cleartext_storage:
+  category: MASVS-STORAGE
+  control: MASVS-STORAGE-2
+  test: MASTG-TEST-0002
+
+hardcoded_credentials:
+  category: MASVS-STORAGE
+  control: MASVS-STORAGE-1
+  test: MASTG-TEST-0003
+
+# Cryptography
+weak_crypto:
+  category: MASVS-CRYPTO
+  control: MASVS-CRYPTO-1
+  test: MASTG-TEST-0013
+
+insecure_random:
+  category: MASVS-CRYPTO
+  control: MASVS-CRYPTO-2
+  test: MASTG-TEST-0014
+
+hardcoded_keys:
+  category: MASVS-CRYPTO
+  control: MASVS-CRYPTO-1
+  test: MASTG-TEST-0015
+
+# Authentication
+weak_authentication:
+  category: MASVS-AUTH
+  control: MASVS-AUTH-1
+  test: MASTG-TEST-0016
+
+session_management:
+  category: MASVS-AUTH
+  control: MASVS-AUTH-2
+  test: MASTG-TEST-0017
+
+biometric_auth:
+  category: MASVS-AUTH
+  control: MASVS-AUTH-3
+  test: MASTG-TEST-0018
+
+# Network
+insecure_network:
+  category: MASVS-NETWORK
+  control: MASVS-NETWORK-1
+  test: MASTG-TEST-0019
+
+ssl_pinning:
+  category: MASVS-NETWORK
+  control: MASVS-NETWORK-2
+  test: MASTG-TEST-0020
+
+certificate_validation:
+  category: MASVS-NETWORK
+  control: MASVS-NETWORK-1
+  test: MASTG-TEST-0021
+
+# Platform
+exported_components:
+  category: MASVS-PLATFORM
+  control: MASVS-PLATFORM-1
+  test: MASTG-TEST-0024
+
+webview_security:
+  category: MASVS-PLATFORM
+  control: MASVS-PLATFORM-2
+  test: MASTG-TEST-0025
+
+deep_link_validation:
+  category: MASVS-PLATFORM
+  control: MASVS-PLATFORM-3
+  test: MASTG-TEST-0026
+
+intent_injection:
+  category: MASVS-PLATFORM
+  control: MASVS-PLATFORM-1
+  test: MASTG-TEST-0027
+
+# Code Quality
+code_injection:
+  category: MASVS-CODE
+  control: MASVS-CODE-1
+  test: MASTG-TEST-0038
+
+debug_enabled:
+  category: MASVS-CODE
+  control: MASVS-CODE-2
+  test: MASTG-TEST-0039
+
+unsafe_native:
+  category: MASVS-CODE
+  control: MASVS-CODE-3
+  test: MASTG-TEST-0040
+
+third_party_libs:
+  category: MASVS-CODE
+  control: MASVS-CODE-4
+  test: MASTG-TEST-0041
+
+# Resilience
+root_detection:
+  category: MASVS-RESILIENCE
+  control: MASVS-RESILIENCE-1
+  test: MASTG-TEST-0048
+
+anti_tampering:
+  category: MASVS-RESILIENCE
+  control: MASVS-RESILIENCE-2
+  test: MASTG-TEST-0049
+
+anti_debugging:
+  category: MASVS-RESILIENCE
+  control: MASVS-RESILIENCE-3
+  test: MASTG-TEST-0050
+
+obfuscation:
+  category: MASVS-RESILIENCE
+  control: MASVS-RESILIENCE-4
+  test: MASTG-TEST-0051
+
+# Privacy
+data_collection:
+  category: MASVS-PRIVACY
+  control: MASVS-PRIVACY-1
+  test: MASTG-TEST-0054
+
+tracking:
+  category: MASVS-PRIVACY
+  control: MASVS-PRIVACY-2
+  test: MASTG-TEST-0055
+
+user_consent:
+  category: MASVS-PRIVACY
+  control: MASVS-PRIVACY-3
+  test: MASTG-TEST-0056

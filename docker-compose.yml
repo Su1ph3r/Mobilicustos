@@ -1,0 +1,137 @@
+services:
+  # Core Services
+  postgres:
+    image: postgres:15.6-alpine
+    container_name: mobilicustos-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mobilicustos}
+      POSTGRES_USER: ${POSTGRES_USER:-mobilicustos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mobilicustos}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mobilicustos
+
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: mobilicustos-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-changeme}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mobilicustos
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: mobilicustos-redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mobilicustos
+
+  # API Service
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: mobilicustos-api
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-mobilicustos}
+      - POSTGRES_USER=${POSTGRES_USER:-mobilicustos}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-changeme}
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./api:/app/api:ro
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      # Docker socket: Use DOCKER_SOCKET_PATH env var for Windows compatibility
+      # Windows: set DOCKER_SOCKET_PATH=//var/run/docker.sock or //./pipe/docker_engine
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mobilicustos
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mobilicustos-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - mobilicustos
+
+  # Report Processor
+  report-processor:
+    build:
+      context: ./report-processor
+      dockerfile: Dockerfile
+    container_name: mobilicustos-report-processor
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-mobilicustos}
+      - POSTGRES_USER=${POSTGRES_USER:-mobilicustos}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - ./reports:/app/reports:ro
+      - ./knowledge-base:/app/knowledge-base:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mobilicustos
+
+  # On-Demand Analyzer Base Images (built but not always running)
+  # These are spawned by the API when needed
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  redis_data:
+
+networks:
+  mobilicustos:
+    driver: bridge
