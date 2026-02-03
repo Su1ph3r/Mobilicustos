@@ -2,19 +2,26 @@
 
 Analyzes app dependencies for known vulnerabilities by parsing
 build.gradle, Podfile, package.json, and pubspec.yaml files.
+
+Enhanced with library fingerprinting and comprehensive CVE detection.
 """
 
 import asyncio
 import json
 import logging
 import re
+import shutil
+import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
-from api.models.database import MobileApp
+from api.models.database import MobileApp, Finding
 from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
+from api.services.cve import CVEDetector, LibraryFingerprinter
+from api.services.cve.models import LibrarySource, DetectionMethod
 
 logger = logging.getLogger(__name__)
 
@@ -59,40 +66,97 @@ class DependencyAnalyzer(BaseAnalyzer):
         "pub": "Pub",
     }
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
-        """Analyze dependencies in the extracted app."""
-        results = []
-        dependencies = []
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze dependencies in the app archive.
 
-        # Parse dependency files based on platform
-        if app.platform == "android":
-            dependencies.extend(await self._parse_gradle_files(extracted_path))
-            dependencies.extend(await self._parse_package_json(extracted_path))
-        elif app.platform == "ios":
-            dependencies.extend(await self._parse_podfile(extracted_path))
-            dependencies.extend(await self._parse_package_json(extracted_path))
+        Extracts the app to a temporary directory, parses dependency files,
+        and checks for known vulnerabilities.
+        """
+        if not app.file_path:
+            logger.warning("No file path for dependency analysis")
+            return []
 
-        # Check for Flutter/React Native
-        if app.framework == "flutter":
-            dependencies.extend(await self._parse_pubspec(extracted_path))
-        elif app.framework == "react_native":
-            dependencies.extend(await self._parse_package_json(extracted_path))
+        results: list[AnalyzerResult] = []
+        dependencies: list[Dependency] = []
 
-        logger.info(f"Found {len(dependencies)} dependencies to analyze")
+        # Extract to temp directory for analysis
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="dep_analyzer_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
 
-        # Check each dependency for vulnerabilities
-        vulnerable_deps = []
-        for dep in dependencies:
-            vulns = await self._check_vulnerability(dep)
-            if vulns:
-                vulnerable_deps.append((dep, vulns))
-                results.append(self._create_finding(dep, vulns, app))
+            # Parse dependency files based on platform
+            if app.platform == "android":
+                dependencies.extend(await self._parse_gradle_files(extracted_path))
+                dependencies.extend(await self._parse_package_json(extracted_path))
+            elif app.platform == "ios":
+                dependencies.extend(await self._parse_podfile(extracted_path))
+                dependencies.extend(await self._parse_package_json(extracted_path))
 
-        # Add summary finding if vulnerabilities found
-        if vulnerable_deps:
-            results.append(self._create_summary_finding(vulnerable_deps, app))
+            # Check for Flutter/React Native
+            if app.framework == "flutter":
+                dependencies.extend(await self._parse_pubspec(extracted_path))
+            elif app.framework == "react_native":
+                dependencies.extend(await self._parse_package_json(extracted_path))
 
-        return results
+            logger.info(f"Found {len(dependencies)} dependencies to analyze")
+
+            # Check each dependency for vulnerabilities
+            vulnerable_deps = []
+            for dep in dependencies:
+                vulns = await self._check_vulnerability(dep)
+                if vulns:
+                    vulnerable_deps.append((dep, vulns))
+                    results.append(self._create_finding(dep, vulns, app))
+
+            # Also run library fingerprinting for native libs and SDKs
+            try:
+                fingerprinter = LibraryFingerprinter()
+                detected_libs = fingerprinter.fingerprint_all(extracted_path)
+
+                for lib in detected_libs:
+                    # Convert to Dependency for existing vulnerability check
+                    dep = Dependency(
+                        package_manager=lib.source.value,
+                        name=lib.name,
+                        version=lib.version,
+                        source_file=lib.file_path or "native"
+                    )
+                    vulns = await self._check_vulnerability(dep)
+                    if vulns:
+                        vulnerable_deps.append((dep, vulns))
+                        results.append(self._create_finding(dep, vulns, app))
+
+                logger.info(f"Fingerprinted {len(detected_libs)} additional libraries")
+            except Exception as e:
+                logger.warning(f"Library fingerprinting failed: {e}")
+
+            # Add summary finding if vulnerabilities found
+            if vulnerable_deps:
+                results.append(self._create_summary_finding(vulnerable_deps, app))
+
+        except zipfile.BadZipFile as e:
+            logger.error(f"Invalid archive file: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Dependency analysis failed: {e}")
+            return []
+        finally:
+            # Clean up temp directory
+            if extracted_path and extracted_path.exists():
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp directory: {e}")
+
+        # Convert AnalyzerResults to Findings
+        findings = []
+        for result in results:
+            finding = self.result_to_finding(result, app)
+            findings.append(finding)
+
+        return findings
 
     async def _parse_gradle_files(self, extracted_path: Path) -> list[Dependency]:
         """Parse build.gradle and build.gradle.kts files."""

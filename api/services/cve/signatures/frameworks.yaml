@@ -1,0 +1,156 @@
+# Mobile Framework Signatures for CVE Detection
+# Used to detect cross-platform frameworks and their versions
+
+frameworks:
+  flutter:
+    name: Flutter
+    cpe_vendor: google
+    cpe_product: flutter
+    indicators:
+      - "libflutter.so"
+      - "flutter_assets"
+      - "io.flutter"
+      - "FlutterActivity"
+    version_files:
+      - path: "flutter_assets/version.json"
+        pattern: '"frameworkVersion":\s*"(\d+\.\d+\.\d+)"'
+      - path: "flutter_assets/AssetManifest.json"
+        pattern: null  # Presence indicates Flutter
+    class_patterns:
+      - "Lio/flutter/embedding/engine/FlutterEngine"
+      - "Lio/flutter/app/FlutterActivity"
+    known_vulnerable:
+      - below: "2.10.5"
+        cves: ["CVE-2022-0451"]  # Example
+
+  react_native:
+    name: React Native
+    cpe_vendor: facebook
+    cpe_product: react-native
+    indicators:
+      - "libreactnativejni.so"
+      - "libreact_nativemodule_core.so"
+      - "index.android.bundle"
+      - "com.facebook.react"
+    version_files:
+      - path: "assets/index.android.bundle"
+        pattern: '"react-native":\s*"(\d+\.\d+\.\d+)"'
+      - path: "package.json"
+        pattern: '"react-native":\s*"[^0-9]*(\d+\.\d+\.\d+)"'
+    class_patterns:
+      - "Lcom/facebook/react/ReactActivity"
+      - "Lcom/facebook/react/bridge/ReactContext"
+    known_vulnerable:
+      - below: "0.67.4"
+        cves: ["CVE-2022-24740"]
+
+  cordova:
+    name: Apache Cordova
+    cpe_vendor: apache
+    cpe_product: cordova
+    indicators:
+      - "cordova.js"
+      - "cordova_plugins.js"
+      - "org.apache.cordova"
+      - "CordovaActivity"
+    version_files:
+      - path: "assets/www/cordova.js"
+        pattern: 'cordova.*version.*["\'](\d+\.\d+\.\d+)["\']'
+      - path: "res/xml/config.xml"
+        pattern: '<preference name="CordovaVersion" value="(\d+\.\d+\.\d+)"'
+    class_patterns:
+      - "Lorg/apache/cordova/CordovaActivity"
+      - "Lorg/apache/cordova/CordovaWebView"
+    known_vulnerable:
+      - below: "10.0.0"
+        cves: ["CVE-2020-6506"]
+
+  xamarin:
+    name: Xamarin
+    cpe_vendor: microsoft
+    cpe_product: xamarin
+    indicators:
+      - "libmonodroid.so"
+      - "libmonosgen-2.0.so"
+      - "Xamarin"
+      - "mono.android"
+    version_files:
+      - path: "assemblies/Xamarin.Forms.Core.dll"
+        pattern: null  # Binary, presence indicates Xamarin
+    class_patterns: []  # Xamarin uses .NET assemblies
+
+  ionic:
+    name: Ionic Framework
+    cpe_vendor: ionic
+    cpe_product: ionic
+    indicators:
+      - "ionic.js"
+      - "@ionic"
+      - "ion-app"
+    version_files:
+      - path: "assets/www/build/main.js"
+        pattern: '@ionic.*version.*(\d+\.\d+\.\d+)'
+      - path: "package.json"
+        pattern: '"@ionic/angular":\s*"[^0-9]*(\d+\.\d+\.\d+)"'
+
+  unity:
+    name: Unity
+    cpe_vendor: unity_technologies
+    cpe_product: unity
+    indicators:
+      - "libunity.so"
+      - "libil2cpp.so"
+      - "UnityPlayer"
+      - "com.unity3d"
+    version_files:
+      - path: "assets/bin/Data/globalgamemanagers"
+        pattern: null  # Binary format
+
+  capacitor:
+    name: Capacitor
+    cpe_vendor: ionic
+    cpe_product: capacitor
+    indicators:
+      - "capacitor.config.json"
+      - "@capacitor"
+      - "com.getcapacitor"
+    version_files:
+      - path: "capacitor.config.json"
+        pattern: '"version":\s*"(\d+\.\d+\.\d+)"'
+      - path: "package.json"
+        pattern: '"@capacitor/core":\s*"[^0-9]*(\d+\.\d+\.\d+)"'
+    class_patterns:
+      - "Lcom/getcapacitor/Bridge"
+      - "Lcom/getcapacitor/BridgeActivity"
+
+  nativescript:
+    name: NativeScript
+    cpe_vendor: nativescript
+    cpe_product: nativescript
+    indicators:
+      - "libnativescript.so"
+      - "nativescript"
+      - "org.nativescript"
+    version_files:
+      - path: "package.json"
+        pattern: '"@nativescript/core":\s*"[^0-9]*(\d+\.\d+\.\d+)"'
+    class_patterns:
+      - "Lcom/tns/NativeScriptApplication"
+
+  electron:
+    name: Electron
+    cpe_vendor: electronjs
+    cpe_product: electron
+    indicators:
+      - "libelectron.so"
+      - "electron"
+    version_files:
+      - path: "package.json"
+        pattern: '"electron":\s*"[^0-9]*(\d+\.\d+\.\d+)"'
+    known_vulnerable:
+      - below: "18.3.7"
+        cves: ["CVE-2022-36077"]
+      - below: "19.0.11"
+        cves: ["CVE-2022-36077"]
+      - below: "20.0.0"
+        cves: ["CVE-2022-36077"]

@@ -1,0 +1,524 @@
+findings:
+  - id: android_webview_javascript_enabled
+    platform: android
+    title: "JavaScript Enabled in WebView"
+    category: "WebView"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+    cwe_id: "CWE-749"
+    cwe_name: "Exposed Dangerous Method or Function"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-6"
+    owasp_mastg_test: "MASTG-TEST-0031"
+    description: |
+      The application enables JavaScript in a WebView. While often necessary for modern
+      web content, this increases the attack surface for XSS and other JavaScript-based
+      attacks, especially when loading untrusted content.
+    impact: |
+      If the WebView loads content from untrusted sources, attackers can inject malicious
+      JavaScript that may access app data, call exposed Java methods, or perform actions
+      on behalf of the user.
+    remediation: |
+      Only enable JavaScript when necessary. Validate and sanitize all URLs loaded in
+      WebViews. Implement Content Security Policy headers for loaded content.
+    detection_patterns:
+      - type: regex
+        pattern: 'setJavaScriptEnabled\(true\)'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+    poc_commands:
+      - type: bash
+        command: "jadx -d /tmp/out {file_path}"
+        description: "Decompile APK"
+      - type: bash
+        command: "grep -rn 'setJavaScriptEnabled' /tmp/out/"
+        description: "Find JavaScript settings"
+    poc_frida_script: |
+      Java.perform(function() {
+          var WebSettings = Java.use('android.webkit.WebSettings');
+          WebSettings.setJavaScriptEnabled.implementation = function(enabled) {
+              console.log("[*] setJavaScriptEnabled: " + enabled);
+              if (enabled) {
+                  console.log("[!] JavaScript enabled in WebView");
+              }
+              return this.setJavaScriptEnabled(enabled);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Only enable JS if absolutely necessary
+          webView.getSettings().setJavaScriptEnabled(false);
+
+          // If JS is needed, validate URLs
+          if (isUrlTrusted(url)) {
+              webView.getSettings().setJavaScriptEnabled(true);
+          }
+        description: "Conditionally enable JavaScript"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing WebView Protocol Handlers"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0031/"
+        type: documentation
+    tags:
+      - webview
+      - javascript
+      - xss
+
+  - id: android_webview_javascript_interface
+    platform: android
+    title: "JavaScript Interface Exposed"
+    category: "WebView"
+    severity: high
+    cvss_score: 8.8
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    cwe_id: "CWE-749"
+    cwe_name: "Exposed Dangerous Method or Function"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-6"
+    owasp_mastg_test: "MASTG-TEST-0030"
+    description: |
+      The application exposes a JavaScript interface to the WebView using
+      addJavascriptInterface(). On Android < 4.2, this allows JavaScript to invoke any
+      method via reflection. On newer versions, only methods annotated with
+      @JavascriptInterface are exposed, but these can still be abused.
+    impact: |
+      Attackers controlling WebView content can call exposed Java methods, potentially
+      accessing sensitive data, executing system commands, or taking other privileged
+      actions depending on the exposed functionality.
+    remediation: |
+      Avoid addJavascriptInterface if possible. If necessary, minimize exposed methods,
+      annotate only specific methods with @JavascriptInterface, and validate all inputs.
+    detection_patterns:
+      - type: regex
+        pattern: 'addJavascriptInterface\('
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'addJavascriptInterface' /tmp/out/"
+        description: "Find JavaScript interface registrations"
+      - type: bash
+        command: "grep -rn '@JavascriptInterface' /tmp/out/"
+        description: "Find exposed methods"
+    poc_frida_script: |
+      Java.perform(function() {
+          var WebView = Java.use('android.webkit.WebView');
+          WebView.addJavascriptInterface.implementation = function(obj, name) {
+              console.log("[!] addJavascriptInterface: " + name);
+              console.log("    Object class: " + obj.$className);
+
+              // List exposed methods
+              var methods = obj.getClass().getDeclaredMethods();
+              for (var i = 0; i < methods.length; i++) {
+                  var annotations = methods[i].getAnnotations();
+                  for (var j = 0; j < annotations.length; j++) {
+                      if (annotations[j].toString().indexOf("JavascriptInterface") !== -1) {
+                          console.log("    Exposed method: " + methods[i].getName());
+                      }
+                  }
+              }
+
+              return this.addJavascriptInterface(obj, name);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Only expose necessary methods with @JavascriptInterface
+          public class SafeJsInterface {
+              @JavascriptInterface
+              public void safeMethod(String input) {
+                  // Validate input thoroughly
+                  if (!isValidInput(input)) return;
+                  // Process safely
+              }
+          }
+
+          // Only add if content is trusted
+          if (isContentTrusted) {
+              webView.addJavascriptInterface(new SafeJsInterface(), "SafeInterface");
+          }
+        description: "Safely expose JavaScript interface"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing JavaScript Bridges"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0030/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - code_execution
+      - data_access
+      - privilege_escalation
+    mitre_mobile_techniques:
+      - T1403
+    tags:
+      - webview
+      - javascript_interface
+      - rce
+
+  - id: android_webview_file_access
+    platform: android
+    title: "File Access Enabled in WebView"
+    category: "WebView"
+    severity: medium
+    cvss_score: 6.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-200"
+    cwe_name: "Exposure of Sensitive Information to an Unauthorized Actor"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-6"
+    owasp_mastg_test: "MASTG-TEST-0031"
+    description: |
+      The application enables file access in WebView (setAllowFileAccess or
+      setAllowFileAccessFromFileURLs). This allows JavaScript in the WebView to read
+      local files, potentially exposing sensitive application data.
+    impact: |
+      Attackers controlling WebView content can read local files including application
+      databases, SharedPreferences, and other sensitive data stored on the device.
+    remediation: |
+      Disable file access unless strictly necessary. Use setAllowFileAccess(false) and
+      setAllowFileAccessFromFileURLs(false). If file access is needed, use a
+      ContentProvider to serve files with proper access control.
+    detection_patterns:
+      - type: regex
+        pattern: 'setAllowFileAccess\(true\)'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'setAllowFileAccessFromFileURLs\(true\)'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'setAllowUniversalAccessFromFileURLs\(true\)'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'setAllowFileAccess\\|setAllowFileAccessFromFileURLs\\|setAllowUniversalAccessFromFileURLs' /tmp/out/"
+        description: "Find file access settings"
+    poc_frida_script: |
+      Java.perform(function() {
+          var WebSettings = Java.use('android.webkit.WebSettings');
+
+          WebSettings.setAllowFileAccess.implementation = function(allow) {
+              console.log("[*] setAllowFileAccess: " + allow);
+              return this.setAllowFileAccess(allow);
+          };
+
+          WebSettings.setAllowFileAccessFromFileURLs.implementation = function(allow) {
+              console.log("[!] setAllowFileAccessFromFileURLs: " + allow);
+              return this.setAllowFileAccessFromFileURLs(allow);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Disable file access
+          WebSettings settings = webView.getSettings();
+          settings.setAllowFileAccess(false);
+          settings.setAllowFileAccessFromFileURLs(false);
+          settings.setAllowUniversalAccessFromFileURLs(false);
+        description: "Disable WebView file access"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing WebViews"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0031/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - local_file_read
+      - data_exfiltration
+    tags:
+      - webview
+      - file_access
+      - local_file_inclusion
+
+  - id: android_webview_cleartext_traffic
+    platform: android
+    title: "WebView Allows Mixed Content"
+    category: "WebView"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-319"
+    cwe_name: "Cleartext Transmission of Sensitive Information"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0019"
+    description: |
+      The application configures WebView to allow mixed content (HTTPS page loading HTTP
+      resources). This enables man-in-the-middle attacks on the HTTP resources loaded
+      within the secure page.
+    impact: |
+      Attackers can intercept and modify HTTP resources loaded in an HTTPS page,
+      potentially injecting malicious JavaScript or stealing data.
+    remediation: |
+      Use MIXED_CONTENT_NEVER_ALLOW to block all mixed content. Ensure all resources
+      are loaded over HTTPS.
+    detection_patterns:
+      - type: regex
+        pattern: 'setMixedContentMode\(.*MIXED_CONTENT_ALWAYS_ALLOW'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'setMixedContentMode' /tmp/out/"
+        description: "Find mixed content settings"
+    remediation_code:
+      - language: java
+        code: |
+          // Block mixed content
+          WebSettings settings = webView.getSettings();
+          settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        description: "Disable mixed content"
+    tags:
+      - webview
+      - mixed_content
+      - https
+
+  - id: android_webview_content_provider_access
+    platform: android
+    title: "WebView Content Provider Access Enabled"
+    category: "WebView"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-200"
+    cwe_name: "Exposure of Sensitive Information to an Unauthorized Actor"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-6"
+    owasp_mastg_test: "MASTG-TEST-0031"
+    description: |
+      The application enables content provider access in WebView via
+      setAllowContentAccess(true). This allows the WebView to access data from content
+      providers, potentially exposing sensitive data from other apps.
+    impact: |
+      JavaScript in the WebView can query content providers to access data from other
+      applications that export providers, potentially leaking contacts, calendar, or
+      other sensitive data.
+    remediation: |
+      Disable content access unless required using setAllowContentAccess(false).
+    detection_patterns:
+      - type: regex
+        pattern: 'setAllowContentAccess\(true\)'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'setAllowContentAccess' /tmp/out/"
+        description: "Find content access settings"
+    remediation_code:
+      - language: java
+        code: |
+          // Disable content provider access
+          webView.getSettings().setAllowContentAccess(false);
+        description: "Disable content access"
+    tags:
+      - webview
+      - content_provider
+      - data_access
+
+  - id: android_webview_insecure_url
+    platform: android
+    title: "WebView Loads Untrusted URLs"
+    category: "WebView"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-749"
+    cwe_name: "Exposed Dangerous Method or Function"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-6"
+    owasp_mastg_test: "MASTG-TEST-0031"
+    description: |
+      The application loads URLs in WebView without proper validation, potentially
+      loading content from untrusted or attacker-controlled sources. This is especially
+      dangerous when combined with JavaScript or file access enabled.
+    impact: |
+      Attackers can inject malicious content into the WebView through deep links, intent
+      extras, or other input vectors, potentially exploiting enabled WebView features.
+    remediation: |
+      Validate and whitelist all URLs loaded in WebViews. Use a WebViewClient with
+      shouldOverrideUrlLoading to intercept and validate navigation.
+    detection_patterns:
+      - type: regex
+        pattern: 'loadUrl\(.*getIntent\(\)'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'loadUrl\(.*getExtra'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb shell am start -n {package_name}/.WebViewActivity -d 'https://evil.com'"
+        description: "Try loading external URL via deep link"
+      - type: adb
+        command: "adb shell am start -n {package_name}/.WebViewActivity --es url 'javascript:alert(1)'"
+        description: "Try loading JavaScript URL via intent extra"
+    poc_frida_script: |
+      Java.perform(function() {
+          var WebView = Java.use('android.webkit.WebView');
+          WebView.loadUrl.overload('java.lang.String').implementation = function(url) {
+              console.log("[*] WebView.loadUrl: " + url);
+              return this.loadUrl(url);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Validate URLs before loading
+          private static final List<String> ALLOWED_HOSTS = Arrays.asList(
+              "example.com", "api.example.com"
+          );
+
+          private boolean isUrlAllowed(String url) {
+              try {
+                  URI uri = new URI(url);
+                  return ALLOWED_HOSTS.contains(uri.getHost());
+              } catch (Exception e) {
+                  return false;
+              }
+          }
+
+          // Use in WebViewClient
+          webView.setWebViewClient(new WebViewClient() {
+              @Override
+              public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                  if (!isUrlAllowed(url)) {
+                      return true; // Block navigation
+                  }
+                  return false;
+              }
+          });
+        description: "Validate and whitelist URLs"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing WebViews"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0031/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - xss
+      - data_theft
+      - code_execution
+    tags:
+      - webview
+      - url_validation
+      - injection
+
+  - id: android_webview_ssl_error_handling
+    platform: android
+    title: "WebView Ignores SSL Errors"
+    category: "WebView"
+    severity: critical
+    cvss_score: 9.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-295"
+    cwe_name: "Improper Certificate Validation"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-2"
+    owasp_mastg_test: "MASTG-TEST-0022"
+    description: |
+      The application's WebViewClient overrides onReceivedSslError and calls
+      handler.proceed() to ignore SSL certificate errors. This completely disables
+      certificate validation, allowing trivial man-in-the-middle attacks.
+    impact: |
+      Attackers can intercept all HTTPS traffic to the WebView using a self-signed
+      certificate, stealing credentials, injecting malicious content, and reading
+      all transmitted data.
+    remediation: |
+      Never call handler.proceed() in onReceivedSslError for production code. Always
+      call handler.cancel() and show an appropriate error to the user.
+    detection_patterns:
+      - type: regex
+        pattern: 'onReceivedSslError.*handler\.proceed\('
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'SslErrorHandler.*proceed'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+    poc_commands:
+      - type: bash
+        command: "mitmproxy -p 8080"
+        description: "Start mitmproxy with self-signed cert"
+      - type: bash
+        command: "grep -rn 'onReceivedSslError' /tmp/out/"
+        description: "Find SSL error handling"
+    poc_frida_script: |
+      Java.perform(function() {
+          var WebViewClient = Java.use('android.webkit.WebViewClient');
+          WebViewClient.onReceivedSslError.implementation = function(view, handler, error) {
+              console.log("[!] onReceivedSslError called");
+              console.log("    Error: " + error.toString());
+              // Let original implementation run to see if it proceeds
+              this.onReceivedSslError(view, handler, error);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // NEVER do this in production:
+          // handler.proceed(); // INSECURE!
+
+          // Always cancel on SSL error
+          @Override
+          public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+              handler.cancel();
+              showSslErrorDialog(error);
+          }
+        description: "Properly handle SSL errors"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Custom Certificate Validation"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0022/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - mitm
+      - credential_theft
+      - data_interception
+    mitre_mobile_techniques:
+      - T1439
+    tags:
+      - webview
+      - ssl
+      - certificate
+      - mitm

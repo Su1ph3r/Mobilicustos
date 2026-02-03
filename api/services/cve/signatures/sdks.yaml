@@ -1,0 +1,287 @@
+# SDK Signatures for CVE Detection
+# Used to detect mobile SDKs through class patterns and resources
+
+sdks:
+  # Analytics SDKs
+  firebase_analytics:
+    name: Firebase Analytics
+    cpe_vendor: google
+    cpe_product: firebase_analytics
+    package_patterns:
+      - "com.google.firebase.analytics"
+      - "com.google.android.gms.analytics"
+    class_patterns:
+      - "Lcom/google/firebase/analytics/FirebaseAnalytics"
+      - "Lcom/google/android/gms/analytics/Tracker"
+    resource_patterns:
+      - "google-services.json"
+
+  google_analytics:
+    name: Google Analytics
+    cpe_vendor: google
+    cpe_product: analytics
+    package_patterns:
+      - "com.google.android.gms.analytics"
+    class_patterns:
+      - "Lcom/google/android/gms/analytics/GoogleAnalytics"
+
+  mixpanel:
+    name: Mixpanel
+    cpe_vendor: mixpanel
+    cpe_product: mixpanel-android
+    package_patterns:
+      - "com.mixpanel.android"
+    class_patterns:
+      - "Lcom/mixpanel/android/mpmetrics/MixpanelAPI"
+
+  amplitude:
+    name: Amplitude
+    cpe_vendor: amplitude
+    cpe_product: amplitude-android
+    package_patterns:
+      - "com.amplitude.api"
+      - "com.amplitude.android"
+    class_patterns:
+      - "Lcom/amplitude/api/Amplitude"
+
+  appsflyer:
+    name: AppsFlyer
+    cpe_vendor: appsflyer
+    cpe_product: appsflyer-android-sdk
+    package_patterns:
+      - "com.appsflyer"
+    class_patterns:
+      - "Lcom/appsflyer/AppsFlyerLib"
+
+  adjust:
+    name: Adjust SDK
+    cpe_vendor: adjust
+    cpe_product: android_sdk
+    package_patterns:
+      - "com.adjust.sdk"
+    class_patterns:
+      - "Lcom/adjust/sdk/Adjust"
+
+  branch:
+    name: Branch.io
+    cpe_vendor: branch
+    cpe_product: branch-android-sdk
+    package_patterns:
+      - "io.branch.referral"
+    class_patterns:
+      - "Lio/branch/referral/Branch"
+
+  # Networking SDKs
+  okhttp:
+    name: OkHttp
+    cpe_vendor: squareup
+    cpe_product: okhttp
+    package_patterns:
+      - "okhttp3"
+      - "com.squareup.okhttp3"
+    class_patterns:
+      - "Lokhttp3/OkHttpClient"
+      - "Lokhttp3/Request"
+      - "Lokhttp3/Response"
+    version_extraction:
+      method: class_constant
+      class: "Lokhttp3/internal/Version"
+      pattern: 'okhttp/(\d+\.\d+\.\d+)'
+
+  retrofit:
+    name: Retrofit
+    cpe_vendor: squareup
+    cpe_product: retrofit
+    package_patterns:
+      - "retrofit2"
+      - "com.squareup.retrofit2"
+    class_patterns:
+      - "Lretrofit2/Retrofit"
+      - "Lretrofit2/Retrofit$Builder"
+
+  volley:
+    name: Android Volley
+    cpe_vendor: google
+    cpe_product: volley
+    package_patterns:
+      - "com.android.volley"
+    class_patterns:
+      - "Lcom/android/volley/RequestQueue"
+      - "Lcom/android/volley/toolbox/Volley"
+
+  # JSON/Serialization SDKs
+  gson:
+    name: Google Gson
+    cpe_vendor: google
+    cpe_product: gson
+    package_patterns:
+      - "com.google.gson"
+    class_patterns:
+      - "Lcom/google/gson/Gson"
+      - "Lcom/google/gson/GsonBuilder"
+
+  jackson:
+    name: Jackson Databind
+    cpe_vendor: fasterxml
+    cpe_product: jackson-databind
+    package_patterns:
+      - "com.fasterxml.jackson.databind"
+      - "com.fasterxml.jackson.core"
+    class_patterns:
+      - "Lcom/fasterxml/jackson/databind/ObjectMapper"
+    known_vulnerable:
+      - below: "2.9.10.8"
+        cves: ["CVE-2020-36518", "CVE-2020-25649"]
+      - below: "2.12.6.1"
+        cves: ["CVE-2022-42003", "CVE-2022-42004"]
+
+  moshi:
+    name: Moshi
+    cpe_vendor: squareup
+    cpe_product: moshi
+    package_patterns:
+      - "com.squareup.moshi"
+    class_patterns:
+      - "Lcom/squareup/moshi/Moshi"
+
+  fastjson:
+    name: Alibaba Fastjson
+    cpe_vendor: alibaba
+    cpe_product: fastjson
+    package_patterns:
+      - "com.alibaba.fastjson"
+    class_patterns:
+      - "Lcom/alibaba/fastjson/JSON"
+    known_vulnerable:
+      - below: "1.2.83"
+        cves: ["CVE-2022-25845"]
+
+  # Image Loading SDKs
+  glide:
+    name: Glide
+    cpe_vendor: bumptech
+    cpe_product: glide
+    package_patterns:
+      - "com.bumptech.glide"
+    class_patterns:
+      - "Lcom/bumptech/glide/Glide"
+      - "Lcom/bumptech/glide/RequestManager"
+
+  picasso:
+    name: Picasso
+    cpe_vendor: squareup
+    cpe_product: picasso
+    package_patterns:
+      - "com.squareup.picasso"
+    class_patterns:
+      - "Lcom/squareup/picasso/Picasso"
+
+  fresco:
+    name: Facebook Fresco
+    cpe_vendor: facebook
+    cpe_product: fresco
+    package_patterns:
+      - "com.facebook.fresco"
+      - "com.facebook.drawee"
+    class_patterns:
+      - "Lcom/facebook/drawee/view/SimpleDraweeView"
+
+  # Social/Auth SDKs
+  facebook_sdk:
+    name: Facebook SDK
+    cpe_vendor: facebook
+    cpe_product: facebook-android-sdk
+    package_patterns:
+      - "com.facebook.android"
+      - "com.facebook.login"
+      - "com.facebook.share"
+    class_patterns:
+      - "Lcom/facebook/FacebookSdk"
+      - "Lcom/facebook/login/LoginManager"
+    resource_patterns:
+      - "facebook_*.xml"
+
+  google_auth:
+    name: Google Sign-In
+    cpe_vendor: google
+    cpe_product: google-api-client
+    package_patterns:
+      - "com.google.android.gms.auth"
+      - "com.google.api.client"
+    class_patterns:
+      - "Lcom/google/android/gms/auth/api/signin/GoogleSignIn"
+
+  # Database SDKs
+  realm:
+    name: Realm
+    cpe_vendor: mongodb
+    cpe_product: realm-java
+    package_patterns:
+      - "io.realm"
+    class_patterns:
+      - "Lio/realm/Realm"
+      - "Lio/realm/RealmConfiguration"
+
+  objectbox:
+    name: ObjectBox
+    cpe_vendor: objectbox
+    cpe_product: objectbox
+    package_patterns:
+      - "io.objectbox"
+    class_patterns:
+      - "Lio/objectbox/BoxStore"
+
+  # Crash Reporting
+  crashlytics:
+    name: Firebase Crashlytics
+    cpe_vendor: google
+    cpe_product: firebase_crashlytics
+    package_patterns:
+      - "com.google.firebase.crashlytics"
+      - "com.crashlytics.sdk.android"
+    class_patterns:
+      - "Lcom/google/firebase/crashlytics/FirebaseCrashlytics"
+      - "Lcom/crashlytics/android/Crashlytics"
+
+  sentry:
+    name: Sentry
+    cpe_vendor: getsentry
+    cpe_product: sentry-java
+    package_patterns:
+      - "io.sentry"
+    class_patterns:
+      - "Lio/sentry/Sentry"
+
+  # Security SDKs
+  bouncycastle:
+    name: Bouncy Castle
+    cpe_vendor: bouncycastle
+    cpe_product: bouncy_castle_crypto_package
+    package_patterns:
+      - "org.bouncycastle"
+    class_patterns:
+      - "Lorg/bouncycastle/jce/provider/BouncyCastleProvider"
+    known_vulnerable:
+      - below: "1.70"
+        cves: ["CVE-2020-28052"]
+
+  # Cloud SDKs
+  aws_sdk:
+    name: AWS SDK
+    cpe_vendor: amazon
+    cpe_product: aws-sdk-android
+    package_patterns:
+      - "com.amazonaws"
+      - "software.amazon.awssdk"
+    class_patterns:
+      - "Lcom/amazonaws/AmazonWebServiceClient"
+
+  azure_sdk:
+    name: Azure SDK
+    cpe_vendor: microsoft
+    cpe_product: azure-sdk-for-android
+    package_patterns:
+      - "com.azure"
+      - "com.microsoft.azure"
+    class_patterns:
+      - "Lcom/azure/android/"

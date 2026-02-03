@@ -1,0 +1,286 @@
+findings:
+  - id: ios_ats_disabled
+    platform: ios
+    title: "App Transport Security Disabled"
+    category: "Network Security"
+    severity: high
+    cvss_score: 7.4
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-319"
+    cwe_name: "Cleartext Transmission of Sensitive Information"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0066"
+    description: |
+      App Transport Security (ATS) is disabled with NSAllowsArbitraryLoads set to true.
+      ATS enforces HTTPS connections with strong TLS configuration. Disabling it allows
+      the app to make insecure HTTP connections.
+    impact: |
+      All network traffic can use unencrypted HTTP, allowing attackers on the network
+      to intercept and modify data including credentials, tokens, and sensitive information.
+    remediation: |
+      Remove NSAllowsArbitraryLoads or set it to false. Configure specific exceptions
+      only for domains that genuinely cannot support HTTPS using NSExceptionDomains.
+    detection_patterns:
+      - type: xpath
+        pattern: "//dict/key[text()='NSAllowsArbitraryLoads']/following-sibling::*[1][name()='true']"
+        file_types:
+
+          - Info.plist
+      - type: regex
+        pattern: 'NSAllowsArbitraryLoads.*<true/>'
+        file_types:
+
+          - plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A1 NSAllowsArbitraryLoads"
+        description: "Check ATS settings"
+      - type: bash
+        command: "mitmproxy -p 8080"
+        description: "Intercept HTTP traffic"
+    remediation_code:
+      - language: plist
+        code: |
+          <key>NSAppTransportSecurity</key>
+          <dict>
+              <key>NSAllowsArbitraryLoads</key>
+              <false/>
+          </dict>
+        description: "Enable ATS"
+    remediation_resources:
+      - title: "Apple Developer - Preventing Insecure Network Connections"
+        url: "https://developer.apple.com/documentation/security/preventing_insecure_network_connections"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - network_interception
+      - credential_theft
+    mitre_mobile_techniques:
+      - T1439
+    tags:
+      - network
+      - ats
+      - https
+      - ios
+
+  - id: ios_ats_allows_local_networking
+    platform: ios
+    title: "ATS Allows Local Networking"
+    category: "Network Security"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-319"
+    cwe_name: "Cleartext Transmission of Sensitive Information"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0066"
+    description: |
+      App Transport Security allows insecure local networking connections
+      (NSAllowsLocalNetworking). This permits HTTP connections to local network hosts.
+    impact: |
+      Local network communications are vulnerable to interception by other devices on
+      the same network, potentially exposing IoT control, local service credentials,
+      or other sensitive data.
+    remediation: |
+      If local networking must use HTTP, ensure no sensitive data is transmitted.
+      Consider using mDNS with TLS for local service discovery and communication.
+    detection_patterns:
+      - type: regex
+        pattern: 'NSAllowsLocalNetworking.*<true/>'
+        file_types:
+
+          - plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A1 NSAllowsLocalNetworking"
+        description: "Check local networking settings"
+    tags:
+      - network
+      - ats
+      - local_network
+      - ios
+
+  - id: ios_ats_exception_insecure
+    platform: ios
+    title: "ATS Exception Allows Insecure Connection"
+    category: "Network Security"
+    severity: medium
+    cvss_score: 5.9
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-319"
+    cwe_name: "Cleartext Transmission of Sensitive Information"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0066"
+    description: |
+      An ATS exception domain has insecure settings allowing cleartext HTTP or weak
+      TLS configuration. While targeted exceptions are better than global ATS disable,
+      they still create vulnerability vectors.
+    impact: |
+      Traffic to the exception domain can be intercepted using man-in-the-middle attacks.
+    remediation: |
+      Remove the exception if the domain can support HTTPS. If not possible, ensure
+      no sensitive data is transmitted to this domain.
+    detection_patterns:
+      - type: regex
+        pattern: 'NSExceptionAllowsInsecureHTTPLoads.*<true/>'
+        file_types:
+
+          - plist
+      - type: regex
+        pattern: 'NSTemporaryExceptionAllowsInsecureHTTPLoads.*<true/>'
+        file_types:
+
+          - plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -B5 -A5 NSExceptionDomains"
+        description: "Check ATS exception domains"
+    tags:
+      - network
+      - ats
+      - exception
+      - ios
+
+  - id: ios_custom_url_scheme
+    platform: ios
+    title: "Custom URL Scheme Registered"
+    category: "Deep Links"
+    severity: info
+    cvss_score: 3.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-939"
+    cwe_name: "Improper Authorization in Handler for Custom URL Scheme"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-7"
+    owasp_mastg_test: "MASTG-TEST-0075"
+    description: |
+      The application registers custom URL schemes. Unlike Universal Links, custom
+      schemes can be registered by any app, allowing potential hijacking.
+    impact: |
+      A malicious app can register the same scheme and intercept deep links, potentially
+      stealing OAuth tokens, session data, or redirecting users to phishing content.
+    remediation: |
+      Use Universal Links instead of custom URL schemes for sensitive flows. Validate
+      all input from URL scheme handlers carefully.
+    detection_patterns:
+      - type: xpath
+        pattern: "//dict/key[text()='CFBundleURLSchemes']"
+        file_types:
+
+          - Info.plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A5 CFBundleURLSchemes"
+        description: "List registered URL schemes"
+    remediation_resources:
+      - title: "Apple Developer - Universal Links"
+        url: "https://developer.apple.com/documentation/xcode/allowing-apps-and-websites-to-link-to-your-content"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - url_hijacking
+      - parameter_theft
+    tags:
+      - deep_link
+      - url_scheme
+      - ios
+
+  - id: ios_background_modes
+    platform: ios
+    title: "Background Modes Enabled"
+    category: "Configuration"
+    severity: info
+    cwe_id: "CWE-250"
+    cwe_name: "Execution with Unnecessary Privileges"
+    owasp_masvs_category: "MASVS-PRIVACY"
+    owasp_masvs_control: "MASVS-PRIVACY-1"
+    description: |
+      The application has background execution modes enabled. Background modes allow
+      the app to continue running in the background, which may impact battery life
+      and could be used to track user activity.
+    impact: |
+      Background execution can be used for legitimate purposes (audio, location, VoIP)
+      but may also enable tracking or data collection without user awareness.
+    remediation: |
+      Only request background modes that are strictly necessary. Document the purpose
+      of each background mode. Remove unused modes.
+    detection_patterns:
+      - type: xpath
+        pattern: "//dict/key[text()='UIBackgroundModes']"
+        file_types:
+
+          - Info.plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A10 UIBackgroundModes"
+        description: "List background modes"
+    tags:
+      - privacy
+      - background
+      - ios
+
+  - id: ios_query_schemes
+    platform: ios
+    title: "URL Schemes Query List"
+    category: "Privacy"
+    severity: info
+    cwe_id: "CWE-200"
+    cwe_name: "Exposure of Sensitive Information to an Unauthorized Actor"
+    owasp_masvs_category: "MASVS-PRIVACY"
+    owasp_masvs_control: "MASVS-PRIVACY-1"
+    description: |
+      The application declares URL schemes it can query via LSApplicationQueriesSchemes.
+      This can be used to fingerprint installed apps on the device.
+    impact: |
+      The app can detect whether specific apps are installed, which can be used for
+      advertising, user profiling, or determining attack surface.
+    remediation: |
+      Only query schemes that are necessary for app functionality. Do not use scheme
+      queries for user tracking or fingerprinting.
+    detection_patterns:
+      - type: xpath
+        pattern: "//dict/key[text()='LSApplicationQueriesSchemes']"
+        file_types:
+
+          - Info.plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A20 LSApplicationQueriesSchemes"
+        description: "List queryable schemes"
+    tags:
+      - privacy
+      - fingerprinting
+      - ios
+
+  - id: ios_required_device_capabilities
+    platform: ios
+    title: "Required Device Capabilities"
+    category: "Configuration"
+    severity: info
+    description: |
+      The application declares required device capabilities. This is informational but
+      helps understand the app's hardware requirements and potential attack surface
+      (e.g., NFC, Bluetooth).
+    impact: |
+      Understanding required capabilities helps assess potential attack vectors through
+      specific hardware interfaces.
+    remediation: |
+      Ensure only necessary capabilities are required. Secure all hardware interface
+      communications appropriately.
+    detection_patterns:
+      - type: xpath
+        pattern: "//dict/key[text()='UIRequiredDeviceCapabilities']"
+        file_types:
+
+          - Info.plist
+    poc_commands:
+      - type: bash
+        command: "plutil -p Info.plist | grep -A10 UIRequiredDeviceCapabilities"
+        description: "List required capabilities"
+    tags:
+      - configuration
+      - capabilities
+      - ios

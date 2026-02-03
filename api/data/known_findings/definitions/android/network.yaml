@@ -1,0 +1,362 @@
+findings:
+  - id: android_missing_network_security_config
+    platform: android
+    title: "Missing Network Security Configuration"
+    category: "Network Security"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-295"
+    cwe_name: "Improper Certificate Validation"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0019"
+    description: |
+      The application does not define a network_security_config.xml file. Without explicit
+      network security configuration, the app relies on default settings which may allow
+      cleartext traffic or user-installed CA certificates on older Android versions.
+    impact: |
+      On Android 6.0-8.1, user-installed CA certificates are trusted by default, enabling
+      easier man-in-the-middle attacks. Network security behavior varies by Android version.
+    remediation: |
+      Create a network_security_config.xml that explicitly defines trust anchors and
+      cleartext traffic policy. Reference it in AndroidManifest.xml.
+    detection_patterns:
+      - type: xpath
+        pattern: "//application[not(@android:networkSecurityConfig)]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: bash
+        command: "unzip -l {file_path} | grep network_security_config"
+        description: "Check for network security config file"
+    remediation_code:
+      - language: xml
+        code: |
+          <!-- res/xml/network_security_config.xml -->
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <base-config cleartextTrafficPermitted="false">
+                  <trust-anchors>
+                      <certificates src="system" />
+                  </trust-anchors>
+              </base-config>
+          </network-security-config>
+        description: "Create network security config"
+      - language: xml-manifest
+        code: |
+          <application
+              android:networkSecurityConfig="@xml/network_security_config">
+        description: "Reference in AndroidManifest.xml"
+    remediation_resources:
+      - title: "Android Developer - Network Security Configuration"
+        url: "https://developer.android.com/training/articles/security-config"
+        type: documentation
+    tags:
+      - network
+      - security_config
+      - certificate
+
+  - id: android_user_certificates_trusted
+    platform: android
+    title: "User-Installed Certificates Trusted"
+    category: "Network Security"
+    severity: high
+    cvss_score: 7.4
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-295"
+    cwe_name: "Improper Certificate Validation"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-2"
+    owasp_mastg_test: "MASTG-TEST-0020"
+    description: |
+      The application's network security configuration trusts user-installed CA
+      certificates. This allows anyone who can install a certificate on the device
+      (MDM, user, malicious app with device admin) to intercept HTTPS traffic.
+    impact: |
+      Corporate proxies, malicious apps, or attackers with device access can install
+      root certificates and intercept all HTTPS traffic from the application.
+    remediation: |
+      Only trust system certificates in the network security configuration. Remove
+      user certificates from trust-anchors.
+    detection_patterns:
+      - type: regex
+        pattern: '<certificates src="user"'
+        file_types:
+
+          - xml
+      - type: xpath
+        pattern: "//trust-anchors/certificates[@src='user']"
+        file_types:
+
+          - xml
+    poc_commands:
+      - type: bash
+        command: "unzip -p {file_path} res/xml/network_security_config.xml"
+        description: "Extract network security config"
+      - type: bash
+        command: "grep -i 'user' network_security_config.xml"
+        description: "Check for user certificate trust"
+    remediation_code:
+      - language: xml
+        code: |
+          <base-config>
+              <trust-anchors>
+                  <!-- Only trust system certificates -->
+                  <certificates src="system" />
+              </trust-anchors>
+          </base-config>
+        description: "Trust only system certificates"
+    tags:
+      - network
+      - certificate
+      - trust_anchor
+      - mitm
+
+  - id: android_certificate_pinning_bypass
+    platform: android
+    title: "Certificate Pinning Not Implemented"
+    category: "Network Security"
+    severity: medium
+    cvss_score: 5.9
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-295"
+    cwe_name: "Improper Certificate Validation"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-2"
+    owasp_mastg_test: "MASTG-TEST-0021"
+    description: |
+      The application does not implement certificate pinning for its API endpoints.
+      Without pinning, the app trusts any certificate signed by a trusted CA, making
+      it vulnerable to man-in-the-middle attacks if a CA is compromised.
+    impact: |
+      If a certificate authority is compromised or issues a fraudulent certificate,
+      attackers can intercept HTTPS traffic without triggering certificate errors.
+    remediation: |
+      Implement certificate pinning using Network Security Config (Android 7+) or
+      libraries like OkHttp CertificatePinner. Pin to intermediate or leaf certificates.
+    detection_patterns:
+      - type: regex
+        pattern: 'CertificatePinner'
+        file_types:
+
+          - java
+
+          - kt
+      - type: xpath
+        pattern: "//domain-config/pin-set"
+        file_types:
+
+          - xml
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'CertificatePinner\\|pin-set' /tmp/out/"
+        description: "Search for certificate pinning"
+      - type: bash
+        command: "mitmproxy --mode upstream:https://api.example.com -p 8080"
+        description: "Test with mitmproxy - if traffic is intercepted, no pinning"
+    remediation_code:
+      - language: xml
+        code: |
+          <!-- Network Security Config pinning -->
+          <domain-config>
+              <domain includeSubdomains="true">api.example.com</domain>
+              <pin-set expiration="2025-12-31">
+                  <pin digest="SHA-256">base64EncodedPublicKeyHash=</pin>
+                  <pin digest="SHA-256">backupPin=</pin>
+              </pin-set>
+          </domain-config>
+        description: "Configure pinning in network security config"
+      - language: java
+        code: |
+          // OkHttp certificate pinning
+          CertificatePinner pinner = new CertificatePinner.Builder()
+              .add("api.example.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+              .build();
+
+          OkHttpClient client = new OkHttpClient.Builder()
+              .certificatePinner(pinner)
+              .build();
+        description: "Configure OkHttp certificate pinning"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Custom Certificate Validation"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0021/"
+        type: documentation
+    tags:
+      - network
+      - certificate_pinning
+      - ssl
+      - tls
+
+  - id: android_custom_trust_manager
+    platform: android
+    title: "Custom TrustManager Implementation"
+    category: "Network Security"
+    severity: critical
+    cvss_score: 9.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-295"
+    cwe_name: "Improper Certificate Validation"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-2"
+    owasp_mastg_test: "MASTG-TEST-0022"
+    description: |
+      The application implements a custom X509TrustManager that may bypass certificate
+      validation. Empty checkServerTrusted() methods or those that don't throw exceptions
+      effectively disable all certificate validation.
+    impact: |
+      All HTTPS connections can be intercepted using any certificate, including
+      self-signed certificates. Complete loss of transport security.
+    remediation: |
+      Remove custom TrustManager implementations unless absolutely necessary. If needed,
+      ensure checkServerTrusted properly validates certificates using the default
+      TrustManagerFactory.
+    detection_patterns:
+      - type: regex
+        pattern: 'X509TrustManager'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+      - type: regex
+        pattern: 'checkServerTrusted.*\{\s*\}'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'TrustAllCerts'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'X509TrustManager\\|TrustManager' /tmp/out/"
+        description: "Find custom TrustManager"
+      - type: bash
+        command: "grep -A5 'checkServerTrusted' /tmp/out/*.java"
+        description: "Check implementation of checkServerTrusted"
+    poc_frida_script: |
+      Java.perform(function() {
+          var TrustManager = Java.use('javax.net.ssl.X509TrustManager');
+          var TrustManagerImpl = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+
+          TrustManagerImpl.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String').implementation = function(chain, authType) {
+              console.log("[*] checkServerTrusted called");
+              console.log("    AuthType: " + authType);
+              console.log("    Chain length: " + chain.length);
+              // Original may throw - indicates validation is working
+              return this.checkServerTrusted(chain, authType);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use default TrustManager - don't implement custom!
+          TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+              TrustManagerFactory.getDefaultAlgorithm());
+          tmf.init((KeyStore) null);
+          TrustManager[] trustManagers = tmf.getTrustManagers();
+
+          SSLContext sslContext = SSLContext.getInstance("TLS");
+          sslContext.init(null, trustManagers, null);
+        description: "Use default TrustManager"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Custom Certificate Validation"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0022/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - mitm
+      - credential_theft
+      - session_hijacking
+    mitre_mobile_techniques:
+      - T1439
+    tags:
+      - network
+      - trustmanager
+      - ssl
+      - certificate
+
+  - id: android_hostname_verifier_bypass
+    platform: android
+    title: "Custom HostnameVerifier Bypass"
+    category: "Network Security"
+    severity: critical
+    cvss_score: 9.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-297"
+    cwe_name: "Improper Validation of Certificate with Host Mismatch"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-2"
+    owasp_mastg_test: "MASTG-TEST-0022"
+    description: |
+      The application implements a custom HostnameVerifier that always returns true,
+      bypassing hostname verification. This allows certificates for any domain to be
+      accepted when connecting to the target server.
+    impact: |
+      Attackers can use a valid certificate for any domain to intercept HTTPS traffic.
+      Combined with public wifi or DNS spoofing, this enables trivial MITM attacks.
+    remediation: |
+      Remove custom HostnameVerifier implementations. Use the default
+      HttpsURLConnection.getDefaultHostnameVerifier() or OkHttp's default verifier.
+    detection_patterns:
+      - type: regex
+        pattern: 'HostnameVerifier'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+      - type: regex
+        pattern: 'verify.*return true'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'ALLOW_ALL_HOSTNAME_VERIFIER'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'HostnameVerifier\\|AllowAllHostnameVerifier' /tmp/out/"
+        description: "Find custom HostnameVerifier"
+    poc_frida_script: |
+      Java.perform(function() {
+          var HostnameVerifier = Java.use('javax.net.ssl.HostnameVerifier');
+          var HttpsURLConnection = Java.use('javax.net.ssl.HttpsURLConnection');
+
+          HttpsURLConnection.setHostnameVerifier.implementation = function(verifier) {
+              console.log("[!] Custom HostnameVerifier set");
+              return this.setHostnameVerifier(verifier);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use default HostnameVerifier
+          HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+          // Don't call setHostnameVerifier - use default
+        description: "Use default HostnameVerifier"
+    attack_path_entry_point: true
+    attack_path_enables:
+      - mitm
+      - credential_theft
+    tags:
+      - network
+      - hostname_verifier
+      - ssl

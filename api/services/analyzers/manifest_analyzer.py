@@ -193,7 +193,7 @@ Java.perform(function() {{
                         "that excludes sensitive data. For API 31+, use android:dataExtractionRules."
                     ),
                     file_path="AndroidManifest.xml",
-                    code_snippet=f'android:allowBackup="{backup or "true (default)}"',
+                    code_snippet=f'android:allowBackup="{backup if backup else "true (default)"}"',
                     poc_evidence=f"allowBackup is {'not set (defaults to true)' if backup is None else 'explicitly set to true'}. Data can be extracted via ADB backup.",
                     poc_verification=f"adb backup -f backup.ab -apk {app.package_name}",
                     poc_commands=[

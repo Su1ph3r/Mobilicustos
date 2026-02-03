@@ -522,3 +522,61 @@ class ObjectionSession(Base):
 
     # Command History
     command_history: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+
+
+class CVECache(Base):
+    """Cached CVE information for faster lookups."""
+
+    __tablename__ = "cve_cache"
+
+    cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    # CVE Details
+    description: Mapped[str | None] = mapped_column(Text)
+    severity: Mapped[str | None] = mapped_column(String(16))
+    cvss_v3_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 1))
+    cvss_v3_vector: Mapped[str | None] = mapped_column(String(128))
+
+    # Weakness Classification
+    cwe_ids: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+
+    # Affected Products
+    affected_products: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    affected_versions: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    fixed_versions: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+
+    # References
+    references: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+
+    # Exploit Information
+    exploit_available: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Dates
+    published_date: Mapped[datetime | None] = mapped_column(DateTime)
+    last_modified: Mapped[datetime | None] = mapped_column(DateTime)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Cache Control
+    cache_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class LibraryFingerprint(Base):
+    """Cached library fingerprints for fast lookup."""
+
+    __tablename__ = "library_fingerprints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Library Identification
+    library_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    library_version: Mapped[str | None] = mapped_column(String(64))
+    cpe_string: Mapped[str | None] = mapped_column(String(512))
+
+    # Fingerprint Data
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    export_symbols: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    version_strings: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+
+    # Metadata
+    source_type: Mapped[str | None] = mapped_column(String(32))  # native, sdk, framework
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

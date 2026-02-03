@@ -27,12 +27,22 @@ STATIC_ANALYZERS = {
         "native_lib_analyzer",
         "resource_analyzer",
         "secret_scanner",
+        "ssl_pinning_analyzer",
+        "code_quality_analyzer",
+        "firebase_analyzer",
+        "authentication_analyzer",
+        "data_leakage_analyzer",
     ],
     "ios": [
         "plist_analyzer",
         "ios_binary_analyzer",
         "entitlements_analyzer",
         "secret_scanner",
+        "ssl_pinning_analyzer",
+        "code_quality_analyzer",
+        "firebase_analyzer",
+        "authentication_analyzer",
+        "data_leakage_analyzer",
     ],
     "cross_platform": [
         "flutter_analyzer",
@@ -224,6 +234,21 @@ class ScanOrchestrator:
             elif analyzer_name == "ml_model_analyzer":
                 from api.services.ml_analyzer import MLModelAnalyzer
                 analyzer = MLModelAnalyzer()
+            elif analyzer_name == "ssl_pinning_analyzer":
+                from api.services.analyzers.ssl_pinning_analyzer import SSLPinningAnalyzer
+                analyzer = SSLPinningAnalyzer()
+            elif analyzer_name == "code_quality_analyzer":
+                from api.services.analyzers.code_quality_analyzer import CodeQualityAnalyzer
+                analyzer = CodeQualityAnalyzer()
+            elif analyzer_name == "firebase_analyzer":
+                from api.services.analyzers.firebase_analyzer import FirebaseAnalyzer
+                analyzer = FirebaseAnalyzer()
+            elif analyzer_name == "authentication_analyzer":
+                from api.services.analyzers.authentication_analyzer import AuthenticationAnalyzer
+                analyzer = AuthenticationAnalyzer()
+            elif analyzer_name == "data_leakage_analyzer":
+                from api.services.analyzers.data_leakage_analyzer import DataLeakageAnalyzer
+                analyzer = DataLeakageAnalyzer()
             else:
                 logger.warning(f"Unknown analyzer: {analyzer_name}")
                 return []

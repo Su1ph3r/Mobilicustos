@@ -1,0 +1,239 @@
+# Native Library Signatures for CVE Detection
+# Used to fingerprint .so files and identify vulnerable versions
+
+libraries:
+  openssl:
+    name: OpenSSL
+    cpe_vendor: openssl
+    cpe_product: openssl
+    file_patterns:
+      - "libssl.so*"
+      - "libcrypto.so*"
+    export_symbols:
+      - SSL_new
+      - SSL_connect
+      - SSL_read
+      - SSL_write
+      - EVP_aes_256_cbc
+      - RSA_new
+      - RSA_public_encrypt
+      - CRYPTO_malloc
+    version_patterns:
+      - 'OpenSSL\s+(\d+\.\d+\.\d+[a-z]?)'
+      - 'OpenSSL/(\d+\.\d+\.\d+)'
+      - 'libssl\.so\.(\d+\.\d+)'
+    known_vulnerable:
+      - version: "1.0.1"
+        cves: ["CVE-2014-0160"]  # Heartbleed
+      - version: "1.0.2"
+        below: "1.0.2u"
+        cves: ["CVE-2016-2108", "CVE-2016-2107"]
+      - version: "1.1.0"
+        below: "1.1.0l"
+        cves: ["CVE-2019-1551"]
+      - version: "1.1.1"
+        below: "1.1.1k"
+        cves: ["CVE-2021-3449", "CVE-2021-3450"]
+
+  sqlite:
+    name: SQLite
+    cpe_vendor: sqlite
+    cpe_product: sqlite
+    file_patterns:
+      - "libsqlite.so*"
+      - "libsqlite3.so*"
+      - "libsqliteX.so*"
+    export_symbols:
+      - sqlite3_open
+      - sqlite3_open_v2
+      - sqlite3_exec
+      - sqlite3_prepare_v2
+      - sqlite3_step
+      - sqlite3_bind_text
+    version_patterns:
+      - '(\d+\.\d+\.\d+)\s+\d{4}-\d{2}-\d{2}'
+      - 'SQLite\s+version\s+(\d+\.\d+\.\d+)'
+      - 'sqlite3_version.*(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "3.0.0"
+        below: "3.31.0"
+        cves: ["CVE-2020-9327"]
+      - version: "3.0.0"
+        below: "3.32.0"
+        cves: ["CVE-2020-13434", "CVE-2020-13435"]
+
+  curl:
+    name: cURL/libcurl
+    cpe_vendor: haxx
+    cpe_product: curl
+    file_patterns:
+      - "libcurl.so*"
+      - "libcurl-*.so*"
+    export_symbols:
+      - curl_easy_init
+      - curl_easy_perform
+      - curl_easy_setopt
+      - curl_easy_cleanup
+      - curl_global_init
+      - curl_multi_init
+    version_patterns:
+      - 'libcurl/(\d+\.\d+\.\d+)'
+      - 'curl\s+(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "7.0.0"
+        below: "7.79.0"
+        cves: ["CVE-2021-22945", "CVE-2021-22946"]
+      - version: "7.0.0"
+        below: "7.84.0"
+        cves: ["CVE-2022-32205", "CVE-2022-32206"]
+
+  zlib:
+    name: zlib
+    cpe_vendor: zlib
+    cpe_product: zlib
+    file_patterns:
+      - "libz.so*"
+      - "libzlib.so*"
+    export_symbols:
+      - deflate
+      - deflateInit
+      - inflate
+      - inflateInit
+      - compress
+      - uncompress
+      - gzopen
+    version_patterns:
+      - '(\d+\.\d+\.\d+)'
+      - 'zlib\s+(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "1.0.0"
+        below: "1.2.12"
+        cves: ["CVE-2022-37434"]
+
+  libpng:
+    name: libpng
+    cpe_vendor: libpng
+    cpe_product: libpng
+    file_patterns:
+      - "libpng*.so*"
+      - "libpng16.so*"
+      - "libpng15.so*"
+    export_symbols:
+      - png_create_read_struct
+      - png_create_write_struct
+      - png_read_image
+      - png_write_image
+      - png_set_sig_bytes
+    version_patterns:
+      - 'libpng\s+version\s+(\d+\.\d+\.\d+)'
+      - '(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "1.6.0"
+        below: "1.6.37"
+        cves: ["CVE-2019-7317"]
+
+  libjpeg:
+    name: libjpeg
+    cpe_vendor: ijg
+    cpe_product: libjpeg
+    file_patterns:
+      - "libjpeg.so*"
+      - "libjpeg-turbo.so*"
+    export_symbols:
+      - jpeg_create_decompress
+      - jpeg_create_compress
+      - jpeg_read_header
+      - jpeg_start_decompress
+      - jpeg_read_scanlines
+    version_patterns:
+      - 'libjpeg(?:-turbo)?\s+(\d+\.\d+(?:\.\d+)?)'
+      - 'JPEG\s+(\d+[a-z]?)'
+
+  freetype:
+    name: FreeType
+    cpe_vendor: freetype
+    cpe_product: freetype
+    file_patterns:
+      - "libfreetype.so*"
+    export_symbols:
+      - FT_Init_FreeType
+      - FT_New_Face
+      - FT_Set_Char_Size
+      - FT_Load_Glyph
+      - FT_Render_Glyph
+    version_patterns:
+      - 'FreeType\s+(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "2.0.0"
+        below: "2.10.4"
+        cves: ["CVE-2020-15999"]
+
+  ffmpeg:
+    name: FFmpeg
+    cpe_vendor: ffmpeg
+    cpe_product: ffmpeg
+    file_patterns:
+      - "libavcodec.so*"
+      - "libavformat.so*"
+      - "libavutil.so*"
+      - "libswresample.so*"
+    export_symbols:
+      - avcodec_open2
+      - avcodec_send_packet
+      - avcodec_receive_frame
+      - avformat_open_input
+      - av_read_frame
+    version_patterns:
+      - 'FFmpeg\s+version\s+(\d+\.\d+(?:\.\d+)?)'
+      - 'libavcodec\s+(\d+\.\d+\.\d+)'
+
+  expat:
+    name: Expat XML Parser
+    cpe_vendor: libexpat_project
+    cpe_product: libexpat
+    file_patterns:
+      - "libexpat.so*"
+    export_symbols:
+      - XML_ParserCreate
+      - XML_Parse
+      - XML_SetElementHandler
+      - XML_ParserFree
+    version_patterns:
+      - 'expat_(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "2.0.0"
+        below: "2.4.5"
+        cves: ["CVE-2022-25235", "CVE-2022-25236", "CVE-2022-25313"]
+
+  libxml2:
+    name: libxml2
+    cpe_vendor: xmlsoft
+    cpe_product: libxml2
+    file_patterns:
+      - "libxml2.so*"
+    export_symbols:
+      - xmlParseFile
+      - xmlReadFile
+      - xmlDocGetRootElement
+      - xmlFreeDoc
+      - xmlCleanupParser
+    version_patterns:
+      - 'libxml2\s+(\d+\.\d+\.\d+)'
+    known_vulnerable:
+      - version: "2.9.0"
+        below: "2.9.14"
+        cves: ["CVE-2022-29824", "CVE-2022-23308"]
+
+  boringssl:
+    name: BoringSSL
+    cpe_vendor: google
+    cpe_product: boringssl
+    file_patterns:
+      - "libboringssl.so*"
+      - "libcrypto_boring.so*"
+    export_symbols:
+      - SSL_new
+      - SSL_connect
+      - CRYPTO_library_init
+      - BORINGSSL_self_test
+    version_patterns: []  # BoringSSL doesn't use version strings

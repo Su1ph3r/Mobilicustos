@@ -1,0 +1,549 @@
+findings:
+  - id: android_weak_crypto_des
+    platform: android
+    title: "Weak Cryptographic Algorithm: DES"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-327"
+    cwe_name: "Use of a Broken or Risky Cryptographic Algorithm"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0014"
+    description: |
+      The application uses DES (Data Encryption Standard) for cryptographic operations.
+      DES has a key length of only 56 bits and can be broken in hours using modern hardware.
+      It has been deprecated since 2005 and should never be used for protecting sensitive data.
+    impact: |
+      Encrypted data can be decrypted by attackers through brute force attacks. Any
+      sensitive information protected with DES (credentials, tokens, personal data)
+      should be considered compromised.
+    remediation: |
+      Replace DES with AES-256 in GCM mode. Use Android Keystore for key management
+      when possible.
+    detection_patterns:
+      - type: regex
+        pattern: "Cipher\\.getInstance\\([\"']DES"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: regex
+        pattern: "DES/\\w+/\\w+"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: string
+        pattern: "DESede"
+        file_types:
+          - dex
+    poc_commands:
+      - type: bash
+        command: "jadx -d /tmp/out {file_path}"
+        description: "Decompile APK with jadx"
+      - type: bash
+        command: "grep -rn 'DES' /tmp/out/"
+        description: "Search for DES usage"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Cipher = Java.use('javax.crypto.Cipher');
+          Cipher.getInstance.overload('java.lang.String').implementation = function(algo) {
+              console.log("[*] Cipher.getInstance: " + algo);
+              if (algo.indexOf("DES") !== -1) {
+                  console.log("[!] WEAK ALGORITHM DETECTED: " + algo);
+              }
+              return this.getInstance(algo);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Replace DES with AES-GCM
+          Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+          SecretKey key = KeyGenerator.getInstance("AES").generateKey();
+          GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+          cipher.init(Cipher.ENCRYPT_MODE, key, spec);
+        description: "Use AES-GCM instead of DES"
+      - language: kotlin
+        code: |
+          // Replace DES with AES-GCM
+          val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+          val key = KeyGenerator.getInstance("AES").generateKey()
+          val spec = GCMParameterSpec(128, iv)
+          cipher.init(Cipher.ENCRYPT_MODE, key, spec)
+        description: "Use AES-GCM instead of DES (Kotlin)"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Insecure Cryptographic Algorithms"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0014/"
+        type: documentation
+      - title: "NIST Recommendations for Block Cipher Modes"
+        url: "https://csrc.nist.gov/publications/detail/sp/800-38a/final"
+        type: documentation
+    attack_path_enables:
+      - data_decryption
+      - credential_theft
+    mitre_mobile_techniques:
+      - T1521
+    tags:
+      - crypto
+      - des
+      - weak_algorithm
+      - encryption
+
+  - id: android_weak_crypto_rc4
+    platform: android
+    title: "Weak Cryptographic Algorithm: RC4"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-327"
+    cwe_name: "Use of a Broken or Risky Cryptographic Algorithm"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0014"
+    description: |
+      The application uses RC4 (Rivest Cipher 4) stream cipher. RC4 has multiple known
+      vulnerabilities including statistical biases in its keystream that can be exploited
+      to recover plaintext. It was prohibited in TLS by RFC 7465.
+    impact: |
+      Encrypted data can be partially or fully recovered by attackers using known attacks
+      against RC4. Any sensitive information protected with RC4 should be considered at risk.
+    remediation: |
+      Replace RC4 with AES-256 in GCM or CTR mode for stream cipher use cases.
+    detection_patterns:
+      - type: regex
+        pattern: "Cipher\\.getInstance\\([\"']RC4"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: regex
+        pattern: "Cipher\\.getInstance\\([\"']ARCFOUR"
+        file_types:
+          - java
+          - kt
+          - smali
+    poc_commands:
+      - type: bash
+        command: "jadx -d /tmp/out {file_path}"
+        description: "Decompile APK"
+      - type: bash
+        command: "grep -rn 'RC4\\|ARCFOUR' /tmp/out/"
+        description: "Search for RC4/ARCFOUR usage"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Cipher = Java.use('javax.crypto.Cipher');
+          Cipher.getInstance.overload('java.lang.String').implementation = function(algo) {
+              if (algo.indexOf("RC4") !== -1 || algo.indexOf("ARCFOUR") !== -1) {
+                  console.log("[!] WEAK RC4 CIPHER DETECTED: " + algo);
+              }
+              return this.getInstance(algo);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: 'Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");'
+        description: "Use AES-GCM instead of RC4"
+    remediation_resources:
+      - title: "RFC 7465 - Prohibiting RC4 Cipher Suites"
+        url: "https://tools.ietf.org/html/rfc7465"
+        type: documentation
+    tags:
+      - crypto
+      - rc4
+      - weak_algorithm
+      - stream_cipher
+
+  - id: android_weak_crypto_ecb
+    platform: android
+    title: "Insecure Block Cipher Mode: ECB"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-327"
+    cwe_name: "Use of a Broken or Risky Cryptographic Algorithm"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0014"
+    description: |
+      The application uses ECB (Electronic Codebook) mode for block cipher encryption.
+      ECB mode encrypts identical plaintext blocks to identical ciphertext blocks,
+      leaking patterns in the data. This makes it unsuitable for encrypting data larger
+      than one block.
+    impact: |
+      Patterns in the plaintext are preserved in the ciphertext, allowing attackers to
+      identify repeated data, detect patterns, and potentially reconstruct portions of
+      the original data without breaking the encryption.
+    remediation: |
+      Use GCM (Galois/Counter Mode) for authenticated encryption, or CBC with a random IV
+      if authentication is handled separately. Never use ECB for data larger than one block.
+    detection_patterns:
+      - type: regex
+        pattern: "/ECB/"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: regex
+        pattern: "AES/ECB"
+        file_types:
+          - java
+          - kt
+          - smali
+          - dex
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'ECB' /tmp/out/"
+        description: "Search for ECB mode usage"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Cipher = Java.use('javax.crypto.Cipher');
+          Cipher.getInstance.overload('java.lang.String').implementation = function(algo) {
+              if (algo.indexOf("ECB") !== -1) {
+                  console.log("[!] ECB MODE DETECTED: " + algo);
+              }
+              return this.getInstance(algo);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use GCM mode for authenticated encryption
+          Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+          GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+          cipher.init(Cipher.ENCRYPT_MODE, key, spec);
+        description: "Use GCM mode instead of ECB"
+    remediation_resources:
+      - title: "Wikipedia - ECB Mode Weakness"
+        url: "https://en.wikipedia.org/wiki/Block_cipher_mode_of_operation#Electronic_codebook_(ECB)"
+        type: documentation
+    tags:
+      - crypto
+      - ecb
+      - block_cipher
+      - mode
+
+  - id: android_weak_hash_md5
+    platform: android
+    title: "Weak Hash Algorithm: MD5"
+    category: "Cryptography"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-328"
+    cwe_name: "Use of Weak Hash"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0014"
+    description: |
+      The application uses MD5 for hashing. MD5 is cryptographically broken with known
+      collision attacks that can be executed in seconds. It should not be used for any
+      security-sensitive purpose including password hashing, integrity checks, or
+      digital signatures.
+    impact: |
+      Attackers can forge data with the same MD5 hash (collision attack) or reverse
+      hashes using rainbow tables. Password hashes can be cracked quickly using
+      precomputed tables.
+    remediation: |
+      Use SHA-256 or SHA-3 for general hashing. For password hashing, use bcrypt,
+      scrypt, or Argon2 with appropriate work factors.
+    detection_patterns:
+      - type: regex
+        pattern: "MessageDigest\\.getInstance\\([\"']MD5"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: regex
+        pattern: "MD5\\s*\\("
+        file_types:
+          - java
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'MD5' /tmp/out/"
+        description: "Search for MD5 usage"
+    poc_frida_script: |
+      Java.perform(function() {
+          var MessageDigest = Java.use('java.security.MessageDigest');
+          MessageDigest.getInstance.overload('java.lang.String').implementation = function(algo) {
+              console.log("[*] MessageDigest.getInstance: " + algo);
+              if (algo.toUpperCase() === "MD5") {
+                  console.log("[!] WEAK MD5 HASH DETECTED");
+              }
+              return this.getInstance(algo);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: 'MessageDigest md = MessageDigest.getInstance("SHA-256");'
+        description: "Use SHA-256 instead of MD5"
+    remediation_resources:
+      - title: "OWASP - Password Storage Cheat Sheet"
+        url: "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"
+        type: documentation
+    tags:
+      - crypto
+      - md5
+      - weak_hash
+      - hashing
+
+  - id: android_weak_hash_sha1
+    platform: android
+    title: "Weak Hash Algorithm: SHA-1"
+    category: "Cryptography"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-328"
+    cwe_name: "Use of Weak Hash"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0014"
+    description: |
+      The application uses SHA-1 for hashing. SHA-1 has been broken with practical
+      collision attacks demonstrated (SHAttered attack). It has been deprecated for
+      digital signatures and certificates since 2017.
+    impact: |
+      While preimage attacks are not yet practical, collision attacks allow attackers
+      to forge documents or data with the same hash. SHA-1 should not be used for any
+      new security-sensitive applications.
+    remediation: |
+      Replace SHA-1 with SHA-256 or SHA-3. For HMAC usage, SHA-1 may still be acceptable
+      but upgrading is recommended.
+    detection_patterns:
+      - type: regex
+        pattern: "MessageDigest\\.getInstance\\([\"']SHA-?1"
+        file_types:
+          - java
+          - kt
+          - smali
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'SHA-1\\|SHA1' /tmp/out/"
+        description: "Search for SHA-1 usage"
+    remediation_code:
+      - language: java
+        code: 'MessageDigest md = MessageDigest.getInstance("SHA-256");'
+        description: "Use SHA-256 instead of SHA-1"
+    remediation_resources:
+      - title: "SHAttered - SHA-1 Collision Attack"
+        url: "https://shattered.io/"
+        type: documentation
+    tags:
+      - crypto
+      - sha1
+      - weak_hash
+      - hashing
+
+  - id: android_hardcoded_crypto_key
+    platform: android
+    title: "Hardcoded Cryptographic Key"
+    category: "Cryptography"
+    severity: critical
+    cvss_score: 9.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-321"
+    cwe_name: "Use of Hard-coded Cryptographic Key"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-1"
+    owasp_mastg_test: "MASTG-TEST-0013"
+    description: |
+      A cryptographic key appears to be hardcoded in the application. Hardcoded keys can
+      be extracted through reverse engineering, compromising all data encrypted with that
+      key across all installations of the app.
+    impact: |
+      Anyone with access to the APK can extract the encryption key and decrypt all data
+      encrypted with it. This compromises the confidentiality of every user's data.
+    remediation: |
+      Never hardcode cryptographic keys. Use Android Keystore to generate and store keys
+      securely. For keys that must be shared, use secure key exchange protocols.
+    detection_patterns:
+      - type: regex
+        pattern: "SecretKeySpec\\([\"'][A-Za-z0-9+/=]{16,}"
+        file_types:
+          - java
+          - kt
+          - smali
+      - type: regex
+        pattern: "AES.*key.*=.*[\"'][A-Za-z0-9+/=]{16,}"
+        file_types:
+          - java
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'SecretKeySpec\\|AESKey\\|encryption_key' /tmp/out/"
+        description: "Search for hardcoded keys"
+    poc_frida_script: |
+      Java.perform(function() {
+          var SecretKeySpec = Java.use('javax.crypto.spec.SecretKeySpec');
+          SecretKeySpec.$init.overload('[B', 'java.lang.String').implementation = function(keyBytes, algo) {
+              console.log("[!] SecretKeySpec created for: " + algo);
+              return this.$init(keyBytes, algo);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use Android Keystore
+          KeyGenerator keyGenerator = KeyGenerator.getInstance(
+              KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+          keyGenerator.init(new KeyGenParameterSpec.Builder(
+              "my_key_alias",
+              KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+              .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+              .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+              .build());
+          SecretKey key = keyGenerator.generateKey();
+        description: "Use Android Keystore for key management"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Hardcoded Cryptographic Keys"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0013/"
+        type: documentation
+      - title: "Android Developer - Android Keystore System"
+        url: "https://developer.android.com/training/articles/keystore"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_decryption
+      - credential_theft
+      - impersonation
+    mitre_mobile_techniques:
+      - T1517
+    tags:
+      - crypto
+      - hardcoded_key
+      - secret
+      - keystore
+
+  - id: android_insecure_random
+    platform: android
+    title: "Insecure Random Number Generator"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-330"
+    cwe_name: "Use of Insufficiently Random Values"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-3"
+    owasp_mastg_test: "MASTG-TEST-0016"
+    description: |
+      The application uses java.util.Random for generating cryptographic values.
+      java.util.Random is a pseudo-random number generator that is predictable and
+      should never be used for security-sensitive purposes.
+    impact: |
+      Attackers can predict the output of java.util.Random, allowing them to guess
+      session tokens, encryption IVs, or other security-critical values.
+    remediation: |
+      Use java.security.SecureRandom for all cryptographic random number generation.
+      Do not seed SecureRandom manually with predictable values.
+    detection_patterns:
+      - type: regex
+        pattern: "new Random\\(\\)"
+        file_types:
+          - java
+          - kt
+      - type: regex
+        pattern: "Random\\(\\).next"
+        file_types:
+          - java
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'new Random()\\|Random()' /tmp/out/ | grep -v SecureRandom"
+        description: "Search for insecure Random usage"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Random = Java.use('java.util.Random');
+          Random.$init.overload().implementation = function() {
+              console.log("[!] Insecure java.util.Random instantiated");
+              return this.$init();
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use SecureRandom instead
+          SecureRandom secureRandom = new SecureRandom();
+          byte[] randomBytes = new byte[32];
+          secureRandom.nextBytes(randomBytes);
+        description: "Use SecureRandom for cryptographic randomness"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Random Number Generation"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0016/"
+        type: documentation
+    tags:
+      - crypto
+      - random
+      - prng
+      - securerandom
+
+  - id: android_static_iv
+    platform: android
+    title: "Static or Predictable Initialization Vector"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-329"
+    cwe_name: "Not Using an Unpredictable IV with CBC Mode"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0015"
+    description: |
+      The application appears to use a static or predictable Initialization Vector (IV)
+      for encryption. IVs must be unique and unpredictable for each encryption operation
+      to prevent pattern analysis attacks.
+    impact: |
+      Using a static IV allows attackers to detect when the same plaintext is encrypted
+      multiple times. In CBC mode, it also enables chosen-plaintext attacks.
+    remediation: |
+      Generate a fresh random IV for each encryption operation using SecureRandom.
+      Store the IV alongside the ciphertext (IVs don't need to be secret).
+    detection_patterns:
+      - type: regex
+        pattern: "IvParameterSpec\\([\"'][^\"]+"
+        file_types:
+          - java
+          - kt
+      - type: regex
+        pattern: "iv\\s*=\\s*[\"'][A-Za-z0-9+/=]+"
+        file_types:
+          - java
+          - kt
+    poc_commands:
+      - type: bash
+        command: "grep -rn 'IvParameterSpec\\|iv =' /tmp/out/"
+        description: "Search for IV initialization"
+    poc_frida_script: |
+      Java.perform(function() {
+          var IvParameterSpec = Java.use('javax.crypto.spec.IvParameterSpec');
+          IvParameterSpec.$init.overload('[B').implementation = function(iv) {
+              console.log("[*] IvParameterSpec created");
+              return this.$init(iv);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Generate random IV for each encryption
+          SecureRandom random = new SecureRandom();
+          byte[] iv = new byte[12]; // 12 bytes for GCM
+          random.nextBytes(iv);
+          GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+        description: "Generate random IV using SecureRandom"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Insecure Cryptographic Configuration"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0015/"
+        type: documentation
+    tags:
+      - crypto
+      - iv
+      - cbc
+      - gcm
+      - initialization_vector

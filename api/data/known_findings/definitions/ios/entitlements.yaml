@@ -1,0 +1,236 @@
+findings:
+  - id: ios_get_task_allow
+    platform: ios
+    title: "Debugging Entitlement Enabled"
+    category: "Configuration"
+    severity: high
+    cvss_score: 7.2
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-489"
+    cwe_name: "Active Debug Code"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-4"
+    owasp_mastg_test: "MASTG-TEST-0083"
+    description: |
+      The application has the get-task-allow entitlement set to true. This entitlement
+      allows debuggers to attach to the running process and is typically only enabled
+      in development builds.
+    impact: |
+      Attackers can attach a debugger to the running application to inspect memory,
+      modify runtime behavior, bypass security controls, and extract sensitive data.
+    remediation: |
+      Ensure get-task-allow is disabled in production/release builds. This should be
+      set to false automatically when building for distribution.
+    detection_patterns:
+      - type: regex
+        pattern: 'get-task-allow.*<true/>'
+        file_types:
+
+          - entitlements
+
+          - plist
+      - type: xpath
+        pattern: "//key[text()='get-task-allow']/following-sibling::*[1][name()='true']"
+        file_types:
+
+          - entitlements
+    poc_commands:
+      - type: bash
+        command: "codesign -d --entitlements :- app.ipa 2>&1 | grep get-task-allow"
+        description: "Check get-task-allow entitlement"
+      - type: bash
+        command: "lldb -n AppName"
+        description: "Attempt to attach debugger"
+    remediation_code:
+      - language: entitlements
+        code: |
+          <key>get-task-allow</key>
+          <false/>
+        description: "Disable debugging entitlement"
+    remediation_resources:
+      - title: "Apple Developer - Entitlements"
+        url: "https://developer.apple.com/documentation/bundleresources/entitlements"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - debug_access
+      - memory_inspection
+      - code_modification
+    mitre_mobile_techniques:
+      - T1407
+    tags:
+      - entitlements
+      - debug
+      - ios
+
+  - id: ios_aps_development
+    platform: ios
+    title: "Development Push Notification Environment"
+    category: "Configuration"
+    severity: info
+    description: |
+      The application uses the development push notification environment. This is
+      expected for development builds but indicates the build is not production-ready.
+    impact: |
+      Push notifications will only work with the development APNs servers. This
+      typically indicates a development or testing build.
+    remediation: |
+      Use the production APNs environment for App Store and enterprise distribution
+      builds.
+    detection_patterns:
+      - type: regex
+        pattern: 'aps-environment.*development'
+        file_types:
+
+          - entitlements
+    poc_commands:
+      - type: bash
+        command: "codesign -d --entitlements :- app.ipa 2>&1 | grep aps-environment"
+        description: "Check APNs environment"
+    tags:
+      - entitlements
+      - push_notifications
+      - ios
+
+  - id: ios_keychain_access_groups
+    platform: ios
+    title: "Keychain Access Groups Defined"
+    category: "Data Protection"
+    severity: info
+    description: |
+      The application defines Keychain access groups, allowing it to share Keychain
+      items with other apps from the same developer or specific groups.
+    impact: |
+      Keychain data may be accessible to other apps in the same access group. Ensure
+      sensitive credentials are stored with appropriate access restrictions.
+    remediation: |
+      Review Keychain access groups to ensure they don't inadvertently share sensitive
+      data with unintended applications. Use app-specific Keychain items for secrets.
+    detection_patterns:
+      - type: xpath
+        pattern: "//key[text()='keychain-access-groups']"
+        file_types:
+
+          - entitlements
+    poc_commands:
+      - type: bash
+        command: "codesign -d --entitlements :- app.ipa 2>&1 | grep -A10 keychain-access-groups"
+        description: "List Keychain access groups"
+    tags:
+      - entitlements
+      - keychain
+      - ios
+
+  - id: ios_associated_domains
+    platform: ios
+    title: "Associated Domains Configured"
+    category: "Deep Links"
+    severity: info
+    description: |
+      The application has associated domains configured, enabling Universal Links.
+      Universal Links are more secure than custom URL schemes as they require domain
+      verification.
+    impact: |
+      Universal Links can deep link into the app from verified domains. The associated
+      domains should be verified and properly secured.
+    remediation: |
+      Ensure apple-app-site-association file is properly configured on all associated
+      domains. Verify that only intended domains are listed.
+    detection_patterns:
+      - type: xpath
+        pattern: "//key[text()='com.apple.developer.associated-domains']"
+        file_types:
+
+          - entitlements
+    poc_commands:
+      - type: bash
+        command: "codesign -d --entitlements :- app.ipa 2>&1 | grep -A20 associated-domains"
+        description: "List associated domains"
+      - type: bash
+        command: "curl https://example.com/.well-known/apple-app-site-association"
+        description: "Verify apple-app-site-association"
+    tags:
+      - entitlements
+      - universal_links
+      - deep_links
+      - ios
+
+  - id: ios_app_groups
+    platform: ios
+    title: "App Groups Defined"
+    category: "Data Protection"
+    severity: info
+    description: |
+      The application defines app groups, allowing it to share data with other apps
+      and extensions from the same developer through a shared container.
+    impact: |
+      Data in the shared container is accessible to all apps in the group. Sensitive
+      data stored here may be accessible to extensions or other apps.
+    remediation: |
+      Audit what data is stored in shared containers. Encrypt sensitive data before
+      storing in app group shared directories.
+    detection_patterns:
+      - type: xpath
+        pattern: "//key[text()='com.apple.security.application-groups']"
+        file_types:
+
+          - entitlements
+    poc_commands:
+      - type: bash
+        command: "codesign -d --entitlements :- app.ipa 2>&1 | grep -A10 application-groups"
+        description: "List app groups"
+    tags:
+      - entitlements
+      - app_groups
+      - sharing
+      - ios
+
+  - id: ios_inter_app_audio
+    platform: ios
+    title: "Inter-App Audio Entitlement"
+    category: "Configuration"
+    severity: info
+    description: |
+      The application has inter-app audio entitlement, allowing it to send and receive
+      audio to other apps. This is used for audio routing and effects apps.
+    impact: |
+      The app can interact with other audio apps on the device. Ensure audio data
+      handling is secure if processing sensitive audio.
+    remediation: |
+      Only request this entitlement if inter-app audio functionality is required.
+    detection_patterns:
+      - type: xpath
+        pattern: "//key[text()='inter-app-audio']"
+        file_types:
+
+          - entitlements
+    tags:
+      - entitlements
+      - audio
+      - ios
+
+  - id: ios_siri_entitlement
+    platform: ios
+    title: "Siri Integration Entitlement"
+    category: "Privacy"
+    severity: info
+    description: |
+      The application has Siri integration entitlement, allowing it to handle Siri
+      intents and shortcuts. Voice commands may trigger app functionality.
+    impact: |
+      Siri may access app data or trigger functionality based on voice commands.
+      Ensure sensitive operations require additional authentication.
+    remediation: |
+      Implement appropriate authentication for sensitive Siri intents. Audit what
+      functionality is exposed to Siri.
+    detection_patterns:
+      - type: xpath
+        pattern: "//key[text()='com.apple.developer.siri']"
+        file_types:
+
+          - entitlements
+    tags:
+      - entitlements
+      - siri
+      - privacy
+      - ios

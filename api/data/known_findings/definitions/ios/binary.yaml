@@ -1,0 +1,398 @@
+findings:
+  - id: ios_no_pie
+    platform: ios
+    title: "Position Independent Executable Disabled"
+    category: "Binary Protection"
+    severity: medium
+    cvss_score: 4.7
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    cwe_id: "CWE-119"
+    cwe_name: "Improper Restriction of Operations within the Bounds of a Memory Buffer"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-1"
+    owasp_mastg_test: "MASTG-TEST-0082"
+    description: |
+      The binary is not compiled as a Position Independent Executable (PIE). PIE is
+      required for ASLR (Address Space Layout Randomization) to be effective, which
+      helps prevent memory-based attacks.
+    impact: |
+      Without PIE, the binary loads at predictable memory addresses, making it easier
+      to exploit buffer overflows and other memory corruption vulnerabilities.
+    remediation: |
+      Ensure the app is built with PIE enabled. In Xcode, verify that "Generate Position
+      Dependent Code" is set to No.
+    detection_patterns:
+      - type: string
+        pattern: "PIE"
+        context: "otool -hv"
+    poc_commands:
+      - type: bash
+        command: "otool -hv binary | grep -i pie"
+        description: "Check for PIE flag"
+      - type: bash
+        command: "otool -l binary | grep -A4 LC_SEGMENT"
+        description: "Analyze binary segments"
+    remediation_code:
+      - language: xcode
+        code: |
+          // Build Settings
+          Generate Position Dependent Code = No
+          // Or in Podfile for CocoaPods
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              target.build_configurations.each do |config|
+                config.build_settings['ENABLE_BITCODE'] = 'YES'
+              end
+            end
+          end
+        description: "Enable PIE in Xcode"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Binary Protections"
+        url: "https://mas.owasp.org/MASTG/tests/ios/MASVS-RESILIENCE/MASTG-TEST-0082/"
+        type: documentation
+    tags:
+      - binary
+      - pie
+      - aslr
+      - memory
+
+  - id: ios_no_arc
+    platform: ios
+    title: "Automatic Reference Counting Disabled"
+    category: "Binary Protection"
+    severity: medium
+    cvss_score: 4.7
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    cwe_id: "CWE-416"
+    cwe_name: "Use After Free"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-1"
+    owasp_mastg_test: "MASTG-TEST-0082"
+    description: |
+      The binary does not appear to use Automatic Reference Counting (ARC). ARC helps
+      prevent memory management vulnerabilities like use-after-free and double-free.
+    impact: |
+      Manual memory management is error-prone and can lead to use-after-free, double-free,
+      and memory leak vulnerabilities that attackers can exploit.
+    remediation: |
+      Enable ARC for the project. Convert existing manual retain/release code to ARC
+      using Xcode's migration tool.
+    detection_patterns:
+      - type: string
+        pattern: "_objc_retain"
+        context: "nm binary"
+      - type: string
+        pattern: "_objc_release"
+        context: "nm binary"
+    poc_commands:
+      - type: bash
+        command: "otool -Iv binary | grep -E 'objc_release|objc_retain'"
+        description: "Check for ARC symbols"
+    remediation_resources:
+      - title: "Apple Developer - Transitioning to ARC"
+        url: "https://developer.apple.com/library/archive/releasenotes/ObjectiveC/RN-TransitioningToARC/Introduction/Introduction.html"
+        type: documentation
+    tags:
+      - binary
+      - arc
+      - memory
+      - ios
+
+  - id: ios_no_stack_canary
+    platform: ios
+    title: "Stack Canaries Disabled"
+    category: "Binary Protection"
+    severity: medium
+    cvss_score: 4.7
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    cwe_id: "CWE-121"
+    cwe_name: "Stack-based Buffer Overflow"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-1"
+    owasp_mastg_test: "MASTG-TEST-0082"
+    description: |
+      The binary does not appear to use stack canaries (stack smashing protection). Stack
+      canaries detect buffer overflow attacks that overwrite the return address.
+    impact: |
+      Without stack canaries, stack buffer overflows can more easily be exploited to
+      achieve code execution.
+    remediation: |
+      Ensure stack protection is enabled in build settings. The -fstack-protector-all
+      flag should be used for maximum protection.
+    detection_patterns:
+      - type: string
+        pattern: "__stack_chk"
+        context: "otool -Iv"
+    poc_commands:
+      - type: bash
+        command: "otool -Iv binary | grep __stack_chk"
+        description: "Check for stack canary symbols"
+    remediation_code:
+      - language: xcode
+        code: |
+          // Add to Other C Flags
+          -fstack-protector-all
+        description: "Enable stack protection"
+    tags:
+      - binary
+      - stack_canary
+      - memory
+      - ios
+
+  - id: ios_symbols_not_stripped
+    platform: ios
+    title: "Debug Symbols Not Stripped"
+    category: "Binary Protection"
+    severity: low
+    cvss_score: 3.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-489"
+    cwe_name: "Active Debug Code"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-3"
+    owasp_mastg_test: "MASTG-TEST-0083"
+    description: |
+      The binary contains debug symbols that haven't been stripped. Debug symbols make
+      reverse engineering significantly easier by providing function and variable names.
+    impact: |
+      Attackers can more easily understand the binary's structure, locate sensitive
+      functions, and identify vulnerabilities through symbol information.
+    remediation: |
+      Strip debug symbols for release builds. In Xcode, ensure "Deployment Postprocessing"
+      and "Strip Linked Product" are enabled.
+    detection_patterns:
+      - type: string
+        pattern: "FUNC"
+        context: "nm binary"
+    poc_commands:
+      - type: bash
+        command: "nm binary | head -50"
+        description: "Check for symbols"
+      - type: bash
+        command: "otool -l binary | grep -A2 LC_SYMTAB"
+        description: "Check symbol table"
+    remediation_code:
+      - language: xcode
+        code: |
+          // Build Settings
+          Deployment Postprocessing = Yes
+          Strip Linked Product = Yes
+          Strip Debug Symbols During Copy = Yes
+        description: "Strip symbols in Xcode"
+    tags:
+      - binary
+      - symbols
+      - reverse_engineering
+      - ios
+
+  - id: ios_weak_crypto_cccrypt
+    platform: ios
+    title: "Weak Cryptography in CommonCrypto"
+    category: "Cryptography"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-327"
+    cwe_name: "Use of a Broken or Risky Cryptographic Algorithm"
+    owasp_masvs_category: "MASVS-CRYPTO"
+    owasp_masvs_control: "MASVS-CRYPTO-2"
+    owasp_mastg_test: "MASTG-TEST-0061"
+    description: |
+      The application uses CommonCrypto with potentially weak algorithms. Check for
+      usage of DES, 3DES, RC4, or ECB mode which are considered insecure.
+    impact: |
+      Weak cryptographic algorithms can be broken to expose encrypted data.
+    remediation: |
+      Use AES-256 with GCM mode. Consider using CryptoKit for modern cryptographic
+      operations which provides a safer API.
+    detection_patterns:
+      - type: regex
+        pattern: 'CCCrypt|kCCAlgorithmDES|kCCAlgorithm3DES'
+        file_types:
+
+          - swift
+
+          - m
+    poc_commands:
+      - type: bash
+        command: "strings binary | grep -i 'CCCrypt\\|kCCAlgorithm'"
+        description: "Search for CommonCrypto usage"
+    poc_frida_script: |
+      Interceptor.attach(Module.findExportByName(null, "CCCrypt"), {
+          onEnter: function(args) {
+              var op = args[0].toInt32();
+              var alg = args[1].toInt32();
+              var options = args[2].toInt32();
+              var algNames = {0: "AES", 1: "DES", 2: "3DES", 3: "CAST", 4: "RC4", 5: "RC2", 6: "Blowfish"};
+              console.log("[*] CCCrypt called");
+              console.log("    Algorithm: " + (algNames[alg] || alg));
+              console.log("    Options: " + options + (options & 1 ? " (ECB)" : " (CBC)"));
+          }
+      });
+    remediation_code:
+      - language: swift
+        code: |
+          // Use CryptoKit for modern iOS
+          import CryptoKit
+
+          let key = SymmetricKey(size: .bits256)
+          let sealedBox = try AES.GCM.seal(data, using: key)
+        description: "Use CryptoKit with AES-GCM"
+    remediation_resources:
+      - title: "Apple Developer - CryptoKit"
+        url: "https://developer.apple.com/documentation/cryptokit"
+        type: documentation
+    tags:
+      - crypto
+      - commoncrypto
+      - ios
+
+  - id: ios_insecure_keychain
+    platform: ios
+    title: "Insecure Keychain Access"
+    category: "Data Protection"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-922"
+    cwe_name: "Insecure Storage of Sensitive Information"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-1"
+    owasp_mastg_test: "MASTG-TEST-0053"
+    description: |
+      The application stores sensitive data in the Keychain without proper access
+      control settings. Data may be accessible when the device is locked or after backup.
+    impact: |
+      Sensitive data stored with weak Keychain protection can be accessed on unlocked
+      devices, extracted from backups, or accessed by other apps sharing the same
+      Keychain access group.
+    remediation: |
+      Use kSecAttrAccessibleWhenUnlockedThisDeviceOnly for sensitive data. Enable
+      biometric protection with LAContext for critical credentials.
+    detection_patterns:
+      - type: regex
+        pattern: 'kSecAttrAccessibleAlways|kSecAttrAccessibleAfterFirstUnlock'
+        file_types:
+
+          - swift
+
+          - m
+    poc_commands:
+      - type: bash
+        command: "strings binary | grep -i 'kSecAttr\\|SecItem'"
+        description: "Search for Keychain usage patterns"
+    poc_frida_script: |
+      var SecItemAdd = Module.findExportByName(null, "SecItemAdd");
+      Interceptor.attach(SecItemAdd, {
+          onEnter: function(args) {
+              var query = new ObjC.Object(args[0]);
+              console.log("[*] SecItemAdd called");
+              console.log("    Query: " + query.toString());
+          },
+          onLeave: function(retval) {
+              console.log("    Result: " + retval);
+          }
+      });
+    remediation_code:
+      - language: swift
+        code: |
+          // Secure Keychain storage
+          let query: [String: Any] = [
+              kSecClass as String: kSecClassGenericPassword,
+              kSecAttrAccount as String: "user_password",
+              kSecValueData as String: password.data(using: .utf8)!,
+              kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+          ]
+          SecItemAdd(query as CFDictionary, nil)
+        description: "Use secure Keychain accessibility"
+    remediation_resources:
+      - title: "Apple Developer - Keychain Services"
+        url: "https://developer.apple.com/documentation/security/keychain_services"
+        type: documentation
+    tags:
+      - keychain
+      - storage
+      - ios
+
+  - id: ios_jailbreak_detection_absent
+    platform: ios
+    title: "No Jailbreak Detection"
+    category: "Binary Protection"
+    severity: low
+    cvss_score: 3.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-693"
+    cwe_name: "Protection Mechanism Failure"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-1"
+    owasp_mastg_test: "MASTG-TEST-0081"
+    description: |
+      The application does not appear to implement jailbreak detection. Jailbroken
+      devices have weakened security controls, making the app more vulnerable to
+      runtime manipulation and data extraction.
+    impact: |
+      On jailbroken devices, attackers can more easily hook into app functions, bypass
+      security controls, and extract sensitive data.
+    remediation: |
+      Implement jailbreak detection and respond appropriately (alert, restrict
+      functionality, or exit). Note that all detection can be bypassed with sufficient
+      effort, so this is a defense-in-depth measure.
+    detection_patterns:
+      - type: regex
+        pattern: 'Cydia|jailbreak|/Applications/Cydia\.app'
+        file_types:
+
+          - swift
+
+          - m
+    poc_commands:
+      - type: bash
+        command: "strings binary | grep -iE 'cydia|jailbreak|substrate'"
+        description: "Check for jailbreak detection strings"
+    poc_frida_script: |
+      // Bypass common jailbreak checks
+      var fileExistsAtPath = ObjC.classes.NSFileManager["- fileExistsAtPath:"];
+      Interceptor.attach(fileExistsAtPath.implementation, {
+          onEnter: function(args) {
+              var path = ObjC.Object(args[2]).toString();
+              if (path.indexOf("Cydia") !== -1 || path.indexOf("substrate") !== -1) {
+                  console.log("[*] Jailbreak check: " + path);
+              }
+          }
+      });
+    remediation_code:
+      - language: swift
+        code: |
+          func isJailbroken() -> Bool {
+              // Check for common jailbreak paths
+              let paths = [
+                  "/Applications/Cydia.app",
+                  "/Library/MobileSubstrate/MobileSubstrate.dylib",
+                  "/bin/bash",
+                  "/usr/sbin/sshd",
+                  "/etc/apt"
+              ]
+              for path in paths {
+                  if FileManager.default.fileExists(atPath: path) {
+                      return true
+                  }
+              }
+              // Check if can write outside sandbox
+              let testPath = "/private/jailbreak_test"
+              do {
+                  try "test".write(toFile: testPath, atomically: true, encoding: .utf8)
+                  try FileManager.default.removeItem(atPath: testPath)
+                  return true
+              } catch { }
+              return false
+          }
+        description: "Basic jailbreak detection"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Jailbreak Detection"
+        url: "https://mas.owasp.org/MASTG/tests/ios/MASVS-RESILIENCE/MASTG-TEST-0081/"
+        type: documentation
+    tags:
+      - jailbreak
+      - detection
+      - ios
+      - resilience

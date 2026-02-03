@@ -1,0 +1,684 @@
+findings:
+  - id: android_debuggable
+    platform: android
+    title: "Application is Debuggable"
+    category: "Configuration"
+    severity: high
+    cvss_score: 7.2
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-489"
+    cwe_name: "Active Debug Code"
+    owasp_masvs_category: "MASVS-RESILIENCE"
+    owasp_masvs_control: "MASVS-RESILIENCE-4"
+    owasp_mastg_test: "MASTG-TEST-0039"
+    description: |
+      The application has android:debuggable set to true. This allows attackers to attach
+      a debugger and inspect runtime data, modify application behavior, and extract sensitive
+      information. Debug builds should never be released to production.
+    impact: |
+      An attacker can connect a debugger to the running application to: inspect variables
+      containing credentials, modify control flow, bypass security checks, and extract
+      encryption keys from memory.
+    remediation: |
+      Remove android:debuggable="true" from the application tag or ensure release builds
+      have debuggable=false. Use build variants to manage debug vs release configurations.
+    detection_patterns:
+      - type: xpath
+        pattern: "//application[@android:debuggable='true']"
+        file_types:
+
+          - AndroidManifest.xml
+      - type: regex
+        pattern: "android:debuggable\\s*=\\s*[\"\\']true[\"\\']"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb jdwp"
+        description: "List debuggable processes via JDWP"
+      - type: adb
+        command: "adb shell run-as {package_name} ls /data/data/{package_name}"
+        description: "Access app's private data directory (only works on debuggable apps)"
+      - type: adb
+        command: "adb shell am set-debug-app -w {package_name}"
+        description: "Set app to wait for debugger on launch"
+    poc_frida_script: |
+      Java.perform(function() {
+          var context = Java.use('android.app.ActivityThread').currentApplication().getApplicationContext();
+          var appInfo = context.getApplicationInfo();
+          var debuggable = (appInfo.flags.value & 2) != 0;  // FLAG_DEBUGGABLE = 2
+          console.log("[*] Package: {package_name}");
+          console.log("[*] Debuggable: " + debuggable);
+      });
+    remediation_code:
+      - language: xml
+        code: 'android:debuggable="false"'
+        description: "Set debuggable to false in AndroidManifest.xml"
+      - language: gradle
+        code: |
+          android {
+              buildTypes {
+                  release {
+                      debuggable false
+                  }
+              }
+          }
+        description: "Ensure release build type has debuggable disabled"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Debugging Symbols"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0039/"
+        type: documentation
+      - title: "Android Developer - Configure Build Variants"
+        url: "https://developer.android.com/build/build-variants"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - debug_access
+      - memory_inspection
+      - code_modification
+    mitre_mobile_techniques:
+      - T1407
+    tags:
+      - debug
+      - configuration
+      - release
+
+  - id: android_backup_enabled
+    platform: android
+    title: "Application Data Backup Enabled"
+    category: "Data Protection"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:P/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-530"
+    cwe_name: "Exposure of Backup File to an Unauthorized Control Sphere"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-2"
+    owasp_mastg_test: "MASTG-TEST-0008"
+    description: |
+      The application allows backup of its data via ADB. This can expose sensitive data
+      stored in SharedPreferences, databases, and internal storage to anyone with USB access.
+      On Android 12+, backup is enabled by default if not explicitly disabled.
+    impact: |
+      An attacker with physical or ADB access can extract all application data including
+      credentials, tokens, encryption keys, and personal information.
+    remediation: |
+      Set android:allowBackup="false" or implement a BackupAgent that excludes sensitive data.
+      For API 31+, use android:dataExtractionRules to fine-tune what gets backed up.
+    detection_patterns:
+      - type: xpath
+        pattern: "//application[not(@android:allowBackup='false')]"
+        file_types:
+
+          - AndroidManifest.xml
+      - type: regex
+        pattern: "android:allowBackup\\s*=\\s*[\"\\']true[\"\\']"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb backup -f backup.ab -apk {package_name}"
+        description: "Create backup of app data"
+      - type: bash
+        command: 'dd if=backup.ab bs=24 skip=1 | python3 -c "import zlib,sys;sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))" > backup.tar'
+        description: "Extract backup archive (Android backup format)"
+      - type: bash
+        command: "tar -xf backup.tar && find apps -type f -name '*.db' -o -name '*.xml'"
+        description: "Unpack and search for sensitive data files"
+    remediation_code:
+      - language: xml
+        code: |
+          <application
+              android:allowBackup="false"
+              android:fullBackupContent="false">
+        description: "Disable backups in AndroidManifest.xml"
+      - language: xml-api31
+        code: |
+          <application
+              android:allowBackup="false"
+              android:dataExtractionRules="@xml/data_extraction_rules">
+        description: "For API 31+, use dataExtractionRules"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Backups for Sensitive Data"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0008/"
+        type: documentation
+      - title: "Android Developer - Back up user data"
+        url: "https://developer.android.com/guide/topics/data/backup"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_extraction
+      - credential_theft
+    mitre_mobile_techniques:
+      - T1409
+    tags:
+      - backup
+      - storage
+      - data_protection
+
+  - id: android_cleartext_traffic
+    platform: android
+    title: "Clear Text Traffic Allowed"
+    category: "Network Security"
+    severity: high
+    cvss_score: 7.4
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    cwe_id: "CWE-319"
+    cwe_name: "Cleartext Transmission of Sensitive Information"
+    owasp_masvs_category: "MASVS-NETWORK"
+    owasp_masvs_control: "MASVS-NETWORK-1"
+    owasp_mastg_test: "MASTG-TEST-0019"
+    description: |
+      The application explicitly allows clear text (HTTP) traffic. This exposes all
+      network communications to interception by anyone on the network path.
+    impact: |
+      An attacker on the same network can intercept and modify all HTTP traffic,
+      capturing credentials, tokens, session cookies, and sensitive data.
+    remediation: |
+      Set android:usesCleartextTraffic="false" and use HTTPS for all network
+      communications. Configure a Network Security Config if specific domains need HTTP.
+    detection_patterns:
+      - type: xpath
+        pattern: "//application[@android:usesCleartextTraffic='true']"
+        file_types:
+
+          - AndroidManifest.xml
+      - type: regex
+        pattern: "android:usesCleartextTraffic\\s*=\\s*[\"\\']true[\"\\']"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: bash
+        command: "mitmproxy -p 8080"
+        description: "Start mitmproxy to intercept HTTP traffic"
+      - type: adb
+        command: "adb shell settings put global http_proxy 192.168.1.100:8080"
+        description: "Configure device proxy to mitmproxy"
+    poc_frida_script: |
+      Java.perform(function() {
+          var URL = Java.use('java.net.URL');
+          URL.openConnection.overload().implementation = function() {
+              console.log("[*] URL.openConnection: " + this.toString());
+              if (this.toString().startsWith("http://")) {
+                  console.log("[!] CLEARTEXT HTTP CONNECTION DETECTED");
+              }
+              return this.openConnection();
+          };
+      });
+    remediation_code:
+      - language: xml
+        code: 'android:usesCleartextTraffic="false"'
+        description: "Disable cleartext traffic in AndroidManifest.xml"
+      - language: network_security_config
+        code: |
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <base-config cleartextTrafficPermitted="false">
+                  <trust-anchors>
+                      <certificates src="system" />
+                  </trust-anchors>
+              </base-config>
+          </network-security-config>
+        description: "Network Security Config to enforce HTTPS"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Cleartext Traffic"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0019/"
+        type: documentation
+      - title: "Android Developer - Network Security Config"
+        url: "https://developer.android.com/training/articles/security-config"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - network_interception
+      - credential_theft
+      - session_hijacking
+    mitre_mobile_techniques:
+      - T1439
+    tags:
+      - network
+      - cleartext
+      - http
+      - mitm
+
+  - id: android_exported_activity_no_permission
+    platform: android
+    title: "Exported Activity Without Permission"
+    category: "Component Security"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+    cwe_id: "CWE-926"
+    cwe_name: "Improper Export of Android Application Components"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-1"
+    owasp_mastg_test: "MASTG-TEST-0024"
+    description: |
+      An activity is exported without requiring any permission. Any app on the device
+      can start this activity, potentially accessing sensitive UI or triggering
+      privileged functionality.
+    impact: |
+      Other apps can invoke this activity to potentially access sensitive data,
+      trigger privileged actions, or exploit vulnerabilities in the activity's code.
+    remediation: |
+      Either set android:exported="false" if external access is not needed, or protect
+      the activity with a custom permission using android:permission.
+    detection_patterns:
+      - type: xpath
+        pattern: "//activity[@android:exported='true' and not(@android:permission)]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell am start -n {package_name}/{component_name}"
+        description: "Launch the exported activity"
+      - type: adb
+        command: "adb shell am start -n {package_name}/{component_name} -e secret_data 'test'"
+        description: "Test passing extra data to the activity"
+      - type: drozer
+        command: "run app.activity.info -a {package_name}"
+        description: "Enumerate activity details with Drozer"
+    remediation_code:
+      - language: xml
+        code: |
+          <activity
+              android:name=".MyActivity"
+              android:exported="false" />
+        description: "Disable export if external access not needed"
+      - language: xml-protected
+        code: |
+          <activity
+              android:name=".MyActivity"
+              android:exported="true"
+              android:permission="com.example.permission.ACCESS" />
+        description: "Protect with custom permission if export is required"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Vulnerable IPC"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0024/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - ui_access
+      - data_access
+      - function_invocation
+    mitre_mobile_techniques:
+      - T1405
+    tags:
+      - ipc
+      - activity
+      - exported
+      - component
+
+  - id: android_exported_service_no_permission
+    platform: android
+    title: "Exported Service Without Permission"
+    category: "Component Security"
+    severity: high
+    cvss_score: 6.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-926"
+    cwe_name: "Improper Export of Android Application Components"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-1"
+    owasp_mastg_test: "MASTG-TEST-0024"
+    description: |
+      A service is exported without requiring any permission. Any app on the device
+      can bind to or start this service, potentially executing privileged operations
+      or accessing sensitive data processed by the service.
+    impact: |
+      Other apps can start or bind to this service to trigger privileged operations,
+      access internal data, or exploit vulnerabilities in the service's handler code.
+    remediation: |
+      Either set android:exported="false" if external access is not needed, or protect
+      the service with a custom permission using android:permission.
+    detection_patterns:
+      - type: xpath
+        pattern: "//service[@android:exported='true' and not(@android:permission)]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell am startservice -n {package_name}/{component_name}"
+        description: "Start the exported service"
+      - type: drozer
+        command: "run app.service.send {package_name} {component_name}"
+        description: "Send message to service via Drozer"
+      - type: drozer
+        command: "run app.service.info -a {package_name}"
+        description: "Enumerate service details with Drozer"
+    remediation_code:
+      - language: xml
+        code: |
+          <service
+              android:name=".MyService"
+              android:exported="false" />
+        description: "Disable export if external access not needed"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Vulnerable IPC"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0024/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - service_access
+      - privileged_operations
+      - data_access
+    mitre_mobile_techniques:
+      - T1405
+    tags:
+      - ipc
+      - service
+      - exported
+      - component
+
+  - id: android_exported_provider_no_permission
+    platform: android
+    title: "Exported Content Provider Without Permission"
+    category: "Component Security"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N"
+    cwe_id: "CWE-926"
+    cwe_name: "Improper Export of Android Application Components"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-1"
+    owasp_mastg_test: "MASTG-TEST-0024"
+    description: |
+      A content provider is exported without requiring any permission. Any app on the
+      device can query, insert, update, or delete data through this provider.
+    impact: |
+      Other apps can read, modify, or delete sensitive data stored by this application
+      through the content provider, potentially including user credentials, personal
+      information, or application secrets.
+    remediation: |
+      Set android:exported="false" if external access is not needed. If export is required,
+      protect with appropriate read/write permissions using android:readPermission and
+      android:writePermission.
+    detection_patterns:
+      - type: xpath
+        pattern: "//provider[@android:exported='true' and not(@android:permission) and not(@android:readPermission) and not(@android:writePermission)]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell content query --uri content://{package_name}.provider/"
+        description: "Query the content provider"
+      - type: drozer
+        command: "run app.provider.query content://{package_name}.provider/"
+        description: "Query provider via Drozer for deeper analysis"
+      - type: drozer
+        command: "run scanner.provider.finduris -a {package_name}"
+        description: "Discover content provider URIs"
+      - type: drozer
+        command: "run scanner.provider.injection -a {package_name}"
+        description: "Test for SQL injection in provider"
+    remediation_code:
+      - language: xml
+        code: |
+          <provider
+              android:name=".MyProvider"
+              android:exported="false" />
+        description: "Disable export if external access not needed"
+      - language: xml-protected
+        code: |
+          <provider
+              android:name=".MyProvider"
+              android:exported="true"
+              android:readPermission="com.example.permission.READ"
+              android:writePermission="com.example.permission.WRITE" />
+        description: "Protect with read/write permissions"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Vulnerable IPC"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0024/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_read
+      - data_write
+      - sql_injection
+    mitre_mobile_techniques:
+      - T1405
+    tags:
+      - ipc
+      - provider
+      - exported
+      - component
+      - database
+
+  - id: android_exported_receiver_no_permission
+    platform: android
+    title: "Exported Broadcast Receiver Without Permission"
+    category: "Component Security"
+    severity: medium
+    cvss_score: 5.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+    cwe_id: "CWE-926"
+    cwe_name: "Improper Export of Android Application Components"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-1"
+    owasp_mastg_test: "MASTG-TEST-0024"
+    description: |
+      A broadcast receiver is exported without requiring any permission. Any app on the
+      device can send broadcasts to this receiver, potentially triggering unintended actions.
+    impact: |
+      Other apps can send arbitrary broadcasts to trigger functionality, potentially
+      causing denial of service, data leakage, or privilege escalation if the receiver
+      performs sensitive operations based on broadcast content.
+    remediation: |
+      Either set android:exported="false" if external broadcasts are not needed, or protect
+      the receiver with a custom permission using android:permission.
+    detection_patterns:
+      - type: xpath
+        pattern: "//receiver[@android:exported='true' and not(@android:permission)]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell am broadcast -n {package_name}/{component_name}"
+        description: "Send broadcast to the receiver"
+      - type: adb
+        command: "adb shell am broadcast -n {package_name}/{component_name} --es key value"
+        description: "Send broadcast with extra data"
+      - type: drozer
+        command: "run app.broadcast.info -a {package_name}"
+        description: "Enumerate receiver details with Drozer"
+    remediation_code:
+      - language: xml
+        code: |
+          <receiver
+              android:name=".MyReceiver"
+              android:exported="false" />
+        description: "Disable export if external broadcasts not needed"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Vulnerable IPC"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0024/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - broadcast_injection
+      - function_trigger
+    mitre_mobile_techniques:
+      - T1405
+    tags:
+      - ipc
+      - receiver
+      - exported
+      - component
+      - broadcast
+
+  - id: android_task_hijacking
+    platform: android
+    title: "Potential Task Hijacking Vulnerability"
+    category: "Activity Security"
+    severity: medium
+    cvss_score: 5.9
+    cvss_vector: "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-1021"
+    cwe_name: "Improper Restriction of Rendered UI Layers"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-2"
+    owasp_mastg_test: "MASTG-TEST-0029"
+    description: |
+      An activity uses launchMode singleTask or singleInstance without setting a specific
+      taskAffinity. This may be vulnerable to StrandHogg/task hijacking attacks where a
+      malicious app can insert itself into this app's task stack.
+    impact: |
+      A malicious app can hijack the task and display phishing UI that appears to belong
+      to this app, potentially stealing user credentials or sensitive information.
+    remediation: |
+      Set android:taskAffinity="" to use a unique task, or reconsider the launch mode
+      if not strictly necessary. Use FLAG_ACTIVITY_NEW_TASK carefully.
+    detection_patterns:
+      - type: xpath
+        pattern: "//activity[@android:launchMode='singleTask' or @android:launchMode='singleInstance']"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell dumpsys activity activities | grep -A5 {package_name}"
+        description: "Check task affinity and stack behavior"
+    remediation_code:
+      - language: xml
+        code: |
+          <activity
+              android:name=".MainActivity"
+              android:launchMode="singleTask"
+              android:taskAffinity="" />
+        description: "Set empty taskAffinity to prevent hijacking"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Task Hijacking"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0029/"
+        type: documentation
+      - title: "Promon - StrandHogg Vulnerability"
+        url: "https://promon.co/security-news/strandhogg/"
+        type: documentation
+    attack_path_entry_point: false
+    attack_path_enables:
+      - ui_spoofing
+      - credential_theft
+    mitre_mobile_techniques:
+      - T1630
+    tags:
+      - task_hijacking
+      - strandhogg
+      - activity
+      - phishing
+
+  - id: android_custom_url_scheme
+    platform: android
+    title: "Custom URL Scheme Handler"
+    category: "Deep Links"
+    severity: info
+    cvss_score: 3.1
+    cvss_vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-939"
+    cwe_name: "Improper Authorization in Handler for Custom URL Scheme"
+    owasp_masvs_category: "MASVS-PLATFORM"
+    owasp_masvs_control: "MASVS-PLATFORM-2"
+    owasp_mastg_test: "MASTG-TEST-0028"
+    description: |
+      The application handles a custom URL scheme. Custom schemes can be hijacked by
+      malicious apps that register the same scheme, potentially intercepting sensitive
+      data passed through URLs.
+    impact: |
+      A malicious app can register the same scheme to intercept links intended for this
+      app, potentially stealing OAuth tokens, session data, or credentials passed as URL
+      parameters.
+    remediation: |
+      Consider using App Links (verified https:// links) instead of custom schemes. If
+      custom schemes are needed, validate all input parameters carefully and never pass
+      sensitive data through URL parameters.
+    detection_patterns:
+      - type: xpath
+        pattern: "//intent-filter/data[@android:scheme and not(@android:scheme='http') and not(@android:scheme='https')]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: adb
+        command: "adb shell am start -W -a android.intent.action.VIEW -d '{scheme}://test'"
+        description: "Test custom URL scheme handling"
+      - type: bash
+        command: "aapt dump badging {file_path} | grep -i scheme"
+        description: "List registered URL schemes"
+    remediation_code:
+      - language: xml
+        code: |
+          <!-- Use App Links instead of custom schemes -->
+          <intent-filter android:autoVerify="true">
+              <action android:name="android.intent.action.VIEW" />
+              <category android:name="android.intent.category.DEFAULT" />
+              <category android:name="android.intent.category.BROWSABLE" />
+              <data android:scheme="https" android:host="example.com" />
+          </intent-filter>
+        description: "Use verified App Links instead"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Deep Links"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0028/"
+        type: documentation
+      - title: "Android Developer - App Links"
+        url: "https://developer.android.com/training/app-links"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - url_hijacking
+      - parameter_theft
+    mitre_mobile_techniques:
+      - T1437
+    tags:
+      - deep_link
+      - url_scheme
+      - app_links
+
+  - id: android_dangerous_permissions
+    platform: android
+    title: "Dangerous Permissions Requested"
+    category: "Permissions"
+    severity: info
+    cwe_id: "CWE-250"
+    cwe_name: "Execution with Unnecessary Privileges"
+    owasp_masvs_category: "MASVS-PRIVACY"
+    owasp_masvs_control: "MASVS-PRIVACY-1"
+    owasp_mastg_test: "MASTG-TEST-0058"
+    description: |
+      The application requests dangerous permissions that provide access to sensitive
+      user data. These permissions require user consent and should be used only when
+      strictly necessary for app functionality.
+    impact: |
+      These permissions grant access to sensitive user data including contacts, location,
+      camera, microphone, and storage. Verify each permission is necessary and data is
+      handled securely.
+    remediation: |
+      Review each permission to ensure it's necessary. Request permissions at runtime
+      when needed. Minimize data collection and storage. Consider using scoped storage
+      on Android 10+.
+    detection_patterns:
+      - type: xpath
+        pattern: "//uses-permission[contains(@android:name, 'READ_CONTACTS') or contains(@android:name, 'CAMERA') or contains(@android:name, 'ACCESS_FINE_LOCATION')]"
+        file_types:
+
+          - AndroidManifest.xml
+    poc_commands:
+      - type: bash
+        command: "aapt dump permissions {file_path}"
+        description: "List all requested permissions"
+      - type: adb
+        command: "adb shell dumpsys package {package_name} | grep permission"
+        description: "Check granted runtime permissions"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing App Permissions"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-PRIVACY/MASTG-TEST-0058/"
+        type: documentation
+      - title: "Android Developer - Request App Permissions"
+        url: "https://developer.android.com/training/permissions/requesting"
+        type: documentation
+    tags:
+      - permissions
+      - privacy
+      - dangerous

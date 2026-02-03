@@ -1,0 +1,544 @@
+findings:
+  - id: android_world_readable_file
+    platform: android
+    title: "World Readable File Mode"
+    category: "File Security"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-732"
+    cwe_name: "Incorrect Permission Assignment for Critical Resource"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-2"
+    owasp_mastg_test: "MASTG-TEST-0002"
+    description: |
+      The application creates files with MODE_WORLD_READABLE permission, allowing any
+      app on the device to read the file contents. This mode has been deprecated since
+      API 17 and removed in API 24.
+    impact: |
+      Other apps on the device can read sensitive data stored by this application,
+      including credentials, tokens, personal information, or application secrets.
+    remediation: |
+      Use MODE_PRIVATE for all internal files. For sharing data between apps, use
+      ContentProvider with proper permissions or FileProvider.
+    detection_patterns:
+      - type: regex
+        pattern: 'MODE_WORLD_READABLE'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+      - type: regex
+        pattern: "openFileOutput\\([^,]+,\\s*1\\s*\\)"
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb shell run-as {package_name} ls -la /data/data/{package_name}/files/"
+        description: "List app files with permissions"
+      - type: adb
+        command: "adb shell cat /data/data/{package_name}/files/vulnerable_file"
+        description: "Read world-readable file (requires root)"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Context = Java.use('android.content.Context');
+          Context.openFileOutput.overload('java.lang.String', 'int').implementation = function(name, mode) {
+              var modeStr = "MODE_PRIVATE";
+              if (mode == 1) modeStr = "MODE_WORLD_READABLE";
+              else if (mode == 2) modeStr = "MODE_WORLD_WRITEABLE";
+              console.log("[*] openFileOutput: " + name + " mode=" + modeStr);
+              if (mode == 1 || mode == 2) {
+                  console.log("[!] INSECURE FILE MODE DETECTED");
+              }
+              return this.openFileOutput(name, mode);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: 'FileOutputStream fos = openFileOutput("data.txt", Context.MODE_PRIVATE);'
+        description: "Use MODE_PRIVATE for private files"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Local Storage for Sensitive Data"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0002/"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_theft
+      - credential_theft
+    mitre_mobile_techniques:
+      - T1409
+    tags:
+      - storage
+      - permissions
+      - file
+
+  - id: android_world_writable_file
+    platform: android
+    title: "World Writable File Mode"
+    category: "File Security"
+    severity: critical
+    cvss_score: 8.1
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+    cwe_id: "CWE-732"
+    cwe_name: "Incorrect Permission Assignment for Critical Resource"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-2"
+    owasp_mastg_test: "MASTG-TEST-0002"
+    description: |
+      The application creates files with MODE_WORLD_WRITEABLE permission, allowing any
+      app on the device to modify the file contents. This can lead to data corruption
+      or injection of malicious data.
+    impact: |
+      Other apps can modify application data, potentially injecting malicious payloads,
+      corrupting data, or manipulating application behavior through tampered configuration.
+    remediation: |
+      Use MODE_PRIVATE for all internal files. Never use MODE_WORLD_WRITEABLE. For
+      receiving data from other apps, use ContentProvider or Intent mechanisms.
+    detection_patterns:
+      - type: regex
+        pattern: 'MODE_WORLD_WRITEABLE'
+        file_types:
+
+          - java
+
+          - kt
+
+          - smali
+      - type: regex
+        pattern: "openFileOutput\\([^,]+,\\s*2\\s*\\)"
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb shell ls -la /data/data/{package_name}/files/"
+        description: "Check file permissions"
+      - type: adb
+        command: "adb shell 'echo malicious > /data/data/{package_name}/files/vulnerable_file'"
+        description: "Write to world-writable file (requires root)"
+    remediation_code:
+      - language: java
+        code: 'FileOutputStream fos = openFileOutput("data.txt", Context.MODE_PRIVATE);'
+        description: "Use MODE_PRIVATE"
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_tampering
+      - code_injection
+    tags:
+      - storage
+      - permissions
+      - file
+
+  - id: android_external_storage_sensitive_data
+    platform: android
+    title: "Sensitive Data on External Storage"
+    category: "Data Protection"
+    severity: high
+    cvss_score: 7.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-311"
+    cwe_name: "Missing Encryption of Sensitive Data"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-1"
+    owasp_mastg_test: "MASTG-TEST-0001"
+    description: |
+      The application stores data on external storage (SD card) which is accessible to
+      any app with READ_EXTERNAL_STORAGE permission. External storage should never be
+      used for sensitive data.
+    impact: |
+      Any app with storage permissions can read sensitive data stored by this application
+      on external storage, including documents, cached data, or exported files.
+    remediation: |
+      Store sensitive data in internal storage with MODE_PRIVATE. If external storage
+      must be used, encrypt the data before writing. On Android 10+, use scoped storage.
+    detection_patterns:
+      - type: regex
+        pattern: 'getExternalStorageDirectory\(\)'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'getExternalFilesDir\('
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'Environment\.DIRECTORY_'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb shell ls -la /sdcard/Android/data/{package_name}/"
+        description: "List app's external storage"
+      - type: adb
+        command: "adb shell find /sdcard -name '*.db' -o -name '*.json' -o -name '*.xml'"
+        description: "Search for sensitive files on SD card"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Environment = Java.use('android.os.Environment');
+          Environment.getExternalStorageDirectory.implementation = function() {
+              console.log("[*] getExternalStorageDirectory called");
+              console.log(Java.use("android.util.Log").getStackTraceString(Java.use("java.lang.Exception").$new()));
+              return this.getExternalStorageDirectory();
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use internal storage instead
+          File internalDir = context.getFilesDir();
+          FileOutputStream fos = new FileOutputStream(new File(internalDir, "data.txt"));
+        description: "Store in internal storage"
+      - language: java
+        code: |
+          // Or encrypt data before external storage
+          Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+          cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+          byte[] encrypted = cipher.doFinal(sensitiveData);
+        description: "Encrypt before external storage"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Local Storage for Sensitive Data"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0001/"
+        type: documentation
+      - title: "Android Developer - Data Storage"
+        url: "https://developer.android.com/training/data-storage"
+        type: documentation
+    attack_path_entry_point: true
+    attack_path_enables:
+      - data_theft
+    tags:
+      - storage
+      - external
+      - sdcard
+
+  - id: android_shared_preferences_sensitive
+    platform: android
+    title: "Sensitive Data in SharedPreferences"
+    category: "Data Protection"
+    severity: high
+    cvss_score: 6.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-312"
+    cwe_name: "Cleartext Storage of Sensitive Information"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-1"
+    owasp_mastg_test: "MASTG-TEST-0001"
+    description: |
+      The application stores sensitive data in SharedPreferences. While SharedPreferences
+      is stored in the app's private directory, it's stored as plaintext XML and can be
+      extracted from rooted devices or backups.
+    impact: |
+      Sensitive data stored in SharedPreferences can be extracted through ADB backup,
+      rooted device access, or other means, exposing credentials, tokens, or personal data.
+    remediation: |
+      Use EncryptedSharedPreferences from AndroidX Security library, or encrypt sensitive
+      values before storing. Consider using Android Keystore for encryption keys.
+    detection_patterns:
+      - type: regex
+        pattern: 'getSharedPreferences\('
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: '\.edit\(\)\.put(String|Int|Boolean)'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb backup -f backup.ab {package_name}"
+        description: "Create app backup"
+      - type: bash
+        command: "cat backup/apps/{package_name}/sp/*.xml"
+        description: "Read SharedPreferences from backup"
+      - type: adb
+        command: "adb shell run-as {package_name} cat /data/data/{package_name}/shared_prefs/*.xml"
+        description: "Read SharedPreferences on debuggable app"
+    poc_frida_script: |
+      Java.perform(function() {
+          var SharedPreferences = Java.use('android.content.SharedPreferences');
+          var Editor = Java.use('android.content.SharedPreferences$Editor');
+
+          Editor.putString.implementation = function(key, value) {
+              console.log("[*] SharedPreferences.putString: " + key + " = " + value);
+              return this.putString(key, value);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use EncryptedSharedPreferences
+          MasterKey masterKey = new MasterKey.Builder(context)
+              .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+              .build();
+
+          SharedPreferences prefs = EncryptedSharedPreferences.create(
+              context,
+              "secret_shared_prefs",
+              masterKey,
+              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+          );
+        description: "Use EncryptedSharedPreferences"
+    remediation_resources:
+      - title: "Android Developer - EncryptedSharedPreferences"
+        url: "https://developer.android.com/reference/androidx/security/crypto/EncryptedSharedPreferences"
+        type: documentation
+    attack_path_enables:
+      - credential_theft
+      - session_hijacking
+    tags:
+      - storage
+      - sharedpreferences
+      - encryption
+
+  - id: android_sqlite_unencrypted
+    platform: android
+    title: "Unencrypted SQLite Database"
+    category: "Data Protection"
+    severity: high
+    cvss_score: 6.5
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    cwe_id: "CWE-312"
+    cwe_name: "Cleartext Storage of Sensitive Information"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-1"
+    owasp_mastg_test: "MASTG-TEST-0001"
+    description: |
+      The application uses SQLite database without encryption. Database files can be
+      extracted from device backups or rooted devices and read with standard SQLite tools.
+    impact: |
+      All data stored in the SQLite database can be extracted and read in plaintext,
+      potentially including user credentials, personal information, or sensitive
+      application data.
+    remediation: |
+      Use SQLCipher for database encryption, or encrypt sensitive columns individually
+      before storage. Ensure encryption keys are stored securely using Android Keystore.
+    detection_patterns:
+      - type: regex
+        pattern: 'SQLiteDatabase\.openOrCreate'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'getWritableDatabase\(\)'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'Room\.databaseBuilder'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb pull /data/data/{package_name}/databases/"
+        description: "Extract database files (requires root or debuggable)"
+      - type: bash
+        command: "sqlite3 database.db '.tables'"
+        description: "List tables in extracted database"
+      - type: bash
+        command: "sqlite3 database.db 'SELECT * FROM users;'"
+        description: "Query extracted database"
+    poc_frida_script: |
+      Java.perform(function() {
+          var SQLiteDatabase = Java.use('android.database.sqlite.SQLiteDatabase');
+          SQLiteDatabase.rawQuery.overload('java.lang.String', '[Ljava.lang.String;').implementation = function(sql, args) {
+              console.log("[*] SQL Query: " + sql);
+              if (args) console.log("    Args: " + args.join(", "));
+              return this.rawQuery(sql, args);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // Use SQLCipher
+          SQLiteDatabase.loadLibs(context);
+          SQLiteDatabase db = SQLiteDatabase.openOrCreateDatabase(
+              dbFile, "encryption_password", null);
+        description: "Use SQLCipher for database encryption"
+      - language: gradle
+        code: |
+          implementation 'net.zetetic:android-database-sqlcipher:4.5.4'
+        description: "Add SQLCipher dependency"
+    remediation_resources:
+      - title: "SQLCipher for Android"
+        url: "https://www.zetetic.net/sqlcipher/sqlcipher-for-android/"
+        type: documentation
+    attack_path_enables:
+      - data_theft
+      - credential_theft
+    tags:
+      - storage
+      - database
+      - sqlite
+      - encryption
+
+  - id: android_sensitive_logging
+    platform: android
+    title: "Sensitive Data in Logs"
+    category: "Logging"
+    severity: low
+    cvss_score: 3.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-532"
+    cwe_name: "Insertion of Sensitive Information into Log File"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-3"
+    owasp_mastg_test: "MASTG-TEST-0003"
+    description: |
+      The application contains logging statements that may expose sensitive data. Log
+      messages can be read by other apps with READ_LOGS permission (pre-API 16) or via
+      ADB logcat.
+    impact: |
+      Sensitive data logged by the application can be extracted by attackers with ADB
+      access or on older devices by apps with READ_LOGS permission.
+    remediation: |
+      Remove or disable logging in production builds. Use ProGuard rules to strip Log
+      calls. Never log sensitive data like passwords, tokens, or personal information.
+    detection_patterns:
+      - type: regex
+        pattern: 'Log\.(d|v|i|w|e)\('
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'System\.out\.print'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb logcat -d | grep -i password"
+        description: "Search logs for passwords"
+      - type: adb
+        command: "adb logcat -d | grep -i token"
+        description: "Search logs for tokens"
+      - type: adb
+        command: "adb logcat -d | grep -i {package_name}"
+        description: "Filter logs by package name"
+    poc_frida_script: |
+      Java.perform(function() {
+          var Log = Java.use('android.util.Log');
+          ['v', 'd', 'i', 'w', 'e'].forEach(function(level) {
+              Log[level].overload('java.lang.String', 'java.lang.String').implementation = function(tag, msg) {
+                  console.log("[LOG/" + level.toUpperCase() + "] " + tag + ": " + msg);
+                  return this[level](tag, msg);
+              };
+          });
+      });
+    remediation_code:
+      - language: proguard
+        code: |
+          -assumenosideeffects class android.util.Log {
+              public static *** d(...);
+              public static *** v(...);
+              public static *** i(...);
+          }
+        description: "Strip debug logs in ProGuard"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing Logs for Sensitive Data"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0003/"
+        type: documentation
+    tags:
+      - logging
+      - debug
+      - sensitive_data
+
+  - id: android_clipboard_sensitive
+    platform: android
+    title: "Sensitive Data in Clipboard"
+    category: "Data Leakage"
+    severity: medium
+    cvss_score: 4.3
+    cvss_vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    cwe_id: "CWE-200"
+    cwe_name: "Exposure of Sensitive Information to an Unauthorized Actor"
+    owasp_masvs_category: "MASVS-STORAGE"
+    owasp_masvs_control: "MASVS-STORAGE-10"
+    owasp_mastg_test: "MASTG-TEST-0005"
+    description: |
+      The application copies sensitive data to the system clipboard. Clipboard content
+      can be read by any app on Android versions prior to Android 10, and may be
+      accessible to keyboard apps with accessibility services.
+    impact: |
+      Copied sensitive data (passwords, tokens, credit cards) can be accessed by other
+      apps or keyboard apps, potentially leaking credentials or personal information.
+    remediation: |
+      Avoid copying sensitive data to clipboard. If necessary, use Android 13+
+      FLAG_SENSITIVE or implement your own secure clipboard with timeout.
+    detection_patterns:
+      - type: regex
+        pattern: 'ClipboardManager'
+        file_types:
+
+          - java
+
+          - kt
+      - type: regex
+        pattern: 'setPrimaryClip'
+        file_types:
+
+          - java
+
+          - kt
+    poc_commands:
+      - type: adb
+        command: "adb shell service call clipboard 2"
+        description: "Read clipboard content"
+    poc_frida_script: |
+      Java.perform(function() {
+          var ClipboardManager = Java.use('android.content.ClipboardManager');
+          ClipboardManager.setPrimaryClip.implementation = function(clip) {
+              var text = clip.getItemAt(0).getText();
+              console.log("[*] Clipboard setPrimaryClip: " + text);
+              return this.setPrimaryClip(clip);
+          };
+      });
+    remediation_code:
+      - language: java
+        code: |
+          // On Android 13+, mark as sensitive
+          ClipData clip = ClipData.newPlainText("label", sensitiveData);
+          clip.getDescription().setExtras(new PersistableBundle());
+          clip.getDescription().getExtras().putBoolean(
+              ClipDescription.EXTRA_IS_SENSITIVE, true);
+          clipboardManager.setPrimaryClip(clip);
+        description: "Mark clipboard content as sensitive (Android 13+)"
+    remediation_resources:
+      - title: "OWASP MASTG - Testing for Sensitive Data in the Clipboard"
+        url: "https://mas.owasp.org/MASTG/tests/android/MASVS-STORAGE/MASTG-TEST-0005/"
+        type: documentation
+    tags:
+      - clipboard
+      - data_leakage
+      - privacy

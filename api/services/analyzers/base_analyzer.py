@@ -12,6 +12,18 @@ from api.models.database import Finding, MobileApp
 
 logger = logging.getLogger(__name__)
 
+# Lazy import to avoid circular imports
+_finding_registry = None
+
+
+def _get_finding_registry():
+    """Get the finding registry lazily."""
+    global _finding_registry
+    if _finding_registry is None:
+        from api.data.known_findings.registry import get_finding_registry
+        _finding_registry = get_finding_registry()
+    return _finding_registry
+
 
 @dataclass
 class AnalyzerResult:
@@ -240,4 +252,62 @@ class BaseAnalyzer(ABC):
             remediation_commands=result.remediation_commands,
             remediation_code=result.remediation_code,
             remediation_resources=result.remediation_resources,
+        )
+
+    def create_finding_from_known(
+        self,
+        known_finding_id: str,
+        app: MobileApp,
+        file_path: str | None = None,
+        line_number: int | None = None,
+        code_snippet: str | None = None,
+        component_name: str | None = None,
+        additional_evidence: str | None = None,
+        custom_description: str | None = None,
+        custom_impact: str | None = None,
+    ) -> Finding | None:
+        """Create a Finding from a known finding definition in the registry.
+
+        This method allows analyzers to use pre-defined finding templates with
+        standardized metadata (CVSS, CWE, OWASP, PoC commands, etc.) for
+        consistency and reduced code duplication.
+
+        Args:
+            known_finding_id: ID of the known finding definition (e.g., "android_debuggable")
+            app: The MobileApp being analyzed
+            file_path: Path to the affected file
+            line_number: Line number in the file
+            code_snippet: Relevant code snippet
+            component_name: Component name (for placeholder replacement in PoC commands)
+            additional_evidence: Additional PoC evidence to append to the default
+            custom_description: Override the default description if needed
+            custom_impact: Override the default impact if needed
+
+        Returns:
+            Finding object ready to persist, or None if the known finding ID was not found
+
+        Example:
+            # In an analyzer:
+            finding = self.create_finding_from_known(
+                known_finding_id="android_debuggable",
+                app=app,
+                file_path="AndroidManifest.xml",
+                code_snippet='android:debuggable="true"',
+                additional_evidence="Found debuggable=true in manifest",
+            )
+            if finding:
+                findings.append(finding)
+        """
+        registry = _get_finding_registry()
+        return registry.create_finding(
+            known_finding_id=known_finding_id,
+            app=app,
+            tool_name=self.name,
+            file_path=file_path,
+            line_number=line_number,
+            code_snippet=code_snippet,
+            component_name=component_name,
+            additional_evidence=additional_evidence,
+            custom_description=custom_description,
+            custom_impact=custom_impact,
         )
