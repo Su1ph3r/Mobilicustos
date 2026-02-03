@@ -20,10 +20,15 @@ This document describes the security analyzers integrated into Mobilicustos and 
 | **webview_auditor** | Android | Checks WebView configuration for JavaScript interfaces, file access |
 | **ipc_scanner** | Both | Analyzes inter-process communication for injection vulnerabilities |
 | **privacy_analyzer** | Both | Reviews privacy-related code for tracking, data collection |
-| **dependency_analyzer** | Both | Identifies third-party libraries and known vulnerabilities |
+| **dependency_analyzer** | Both | Identifies third-party libraries and known CVEs via OSV/NVD |
 | **secure_storage_analyzer** | Both | Checks data storage practices (SharedPreferences, Keychain) |
 | **api_endpoint_extractor** | Both | Extracts API endpoints and checks for security issues |
 | **resource_analyzer** | Both | Scans resources for sensitive data |
+| **ssl_pinning_analyzer** | Both | Detects SSL/TLS certificate pinning (OkHttp, TrustKit, NSC) |
+| **code_quality_analyzer** | Both | SQL injection, command injection, path traversal, XSS detection |
+| **firebase_analyzer** | Both | Firebase misconfiguration detection (exposed config, insecure rules) |
+| **authentication_analyzer** | Both | Biometric auth usage, credential storage, session management |
+| **data_leakage_analyzer** | Both | Clipboard, screenshot prevention, keyboard cache, backup exposure |
 
 ### Framework-Specific
 
@@ -31,6 +36,30 @@ This document describes the security analyzers integrated into Mobilicustos and 
 |----------|-----------|-------------|
 | **flutter_analyzer** | Flutter | Uses Blutter to decompile Dart code and analyze Flutter-specific patterns |
 | **react_native_analyzer** | React Native | Decompiles Hermes bytecode, extracts JavaScript bundle |
+
+### CVE Detection
+
+| Component | Purpose |
+|-----------|---------|
+| **LibraryFingerprinter** | Detects native libraries, SDKs, and frameworks via signatures |
+| **CPEMatcher** | Maps libraries to CPE identifiers for NVD queries |
+| **OSVClient** | Queries Open Source Vulnerabilities database |
+| **NVDClient** | Queries NIST National Vulnerability Database |
+| **CVEDetector** | Orchestrates fingerprinting and CVE lookups |
+
+Supported library detection:
+- **Native**: OpenSSL, SQLite, curl, FFmpeg, zlib, libpng, libjpeg
+- **SDKs**: OkHttp, Retrofit, Firebase, Gson, Jackson, Glide, Picasso
+- **Frameworks**: Flutter engine, React Native JSC/Hermes, Cordova, Xamarin, Unity
+
+### Attack Path Analysis
+
+| Component | Purpose |
+|-----------|---------|
+| **GraphBuilder** | Constructs attack graph from findings |
+| **Pathfinder** | DFS/BFS/Dijkstra algorithms for path discovery |
+| **ImpactAssessor** | Calculates CIA triad impact scores |
+| **EdgeDefinitions** | 60+ mobile attack pattern definitions |
 
 ### Dynamic Analysis
 

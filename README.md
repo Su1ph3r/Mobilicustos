@@ -187,12 +187,14 @@ start http://localhost:3000
 | Category | Analyzers |
 |----------|-----------|
 | **Manifest Analysis** | manifest_analyzer, plist_analyzer, entitlements_analyzer |
-| **Code Analysis** | dex_analyzer, crypto_auditor, webview_auditor, ipc_scanner |
+| **Code Analysis** | dex_analyzer, crypto_auditor, webview_auditor, ipc_scanner, code_quality_analyzer |
 | **Binary Protection** | binary_protection_analyzer, native_lib_analyzer |
-| **Network Security** | network_security_config_analyzer, api_endpoint_extractor |
-| **Data Storage** | secure_storage_analyzer, secret_scanner, privacy_analyzer |
-| **Framework-Specific** | flutter_analyzer (Blutter), react_native_analyzer (Hermes-dec) |
-| **Dependencies** | dependency_analyzer |
+| **Network Security** | network_security_config_analyzer, api_endpoint_extractor, ssl_pinning_analyzer |
+| **Data Storage** | secure_storage_analyzer, secret_scanner, privacy_analyzer, data_leakage_analyzer |
+| **Authentication** | authentication_analyzer |
+| **Framework-Specific** | flutter_analyzer (Blutter), react_native_analyzer (Hermes-dec), firebase_analyzer |
+| **Dependencies & CVE** | dependency_analyzer, CVE detector (OSV/NVD integration) |
+| **Attack Paths** | Graph-based attack path analysis with 60+ edge definitions |
 | **Dynamic Analysis** | Frida integration, Objection |
 
 ---
@@ -362,12 +364,14 @@ Mobilicustos builds on these excellent open-source security tools:
 
 ## Roadmap
 
+- [x] SDK/library vulnerability database (CVE detection via OSV/NVD)
+- [x] Attack path analysis with graph-based pathfinding
+- [x] Known findings database with YAML definitions
 - [ ] Automated app store monitoring
 - [ ] CI/CD pipeline integration
 - [ ] SARIF export format
 - [ ] Slack/Teams notifications
 - [ ] Multi-tenancy support
-- [ ] SDK/library vulnerability database
 
 ---
 

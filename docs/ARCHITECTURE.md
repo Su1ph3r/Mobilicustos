@@ -42,6 +42,14 @@ Mobilicustos is a containerized application that analyzes mobile applications (A
 │  │  │ binary     │ │ webview    │ │ network    │ │ flutter    │        │   │
 │  │  │ protection │ │ auditor    │ │ security   │ │ analyzer   │        │   │
 │  │  └────────────┘ └────────────┘ └────────────┘ └────────────┘        │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐        │   │
+│  │  │ ssl_       │ │ code_      │ │ firebase   │ │ CVE        │        │   │
+│  │  │ pinning    │ │ quality    │ │ analyzer   │ │ detector   │        │   │
+│  │  └────────────┘ └────────────┘ └────────────┘ └────────────┘        │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐                       │   │
+│  │  │ auth       │ │ data       │ │ attack     │                       │   │
+│  │  │ analyzer   │ │ leakage    │ │ paths      │                       │   │
+│  │  └────────────┘ └────────────┘ └────────────┘                       │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                         │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
@@ -111,6 +119,13 @@ Modular security analyzers that examine different aspects of mobile applications
 | `webview_auditor` | WebView security analysis |
 | `flutter_analyzer` | Flutter-specific analysis |
 | `react_native_analyzer` | React Native analysis |
+| `ssl_pinning_analyzer` | SSL/TLS certificate pinning detection |
+| `code_quality_analyzer` | SQL injection, command injection, path traversal |
+| `firebase_analyzer` | Firebase misconfiguration detection |
+| `authentication_analyzer` | Biometric and credential storage patterns |
+| `data_leakage_analyzer` | Clipboard, screenshot, keyboard cache leaks |
+| `dependency_analyzer` | Library CVE detection via OSV/NVD |
+| `attack_path_generator` | Graph-based attack path analysis |
 
 ### Report Processor
 
