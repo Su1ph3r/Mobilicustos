@@ -149,9 +149,9 @@ class NativeLibAnalyzer(BaseAnalyzer):
                         f"3. Look for 'Type: DYN' (PIE) vs 'Type: EXEC' (non-PIE)"
                     ),
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"readelf -h /tmp/extracted/{lib_full_path} | grep Type",
-                        f"file /tmp/extracted/{lib_full_path}",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract APK contents"},
+                        {"type": "bash", "command": f"readelf -h /tmp/extracted/{lib_full_path} | grep Type", "description": "Check ELF type (DYN=PIE, EXEC=non-PIE)"},
+                        {"type": "bash", "command": f"file /tmp/extracted/{lib_full_path}", "description": "Verify file type"},
                     ],
                     cwe_id="CWE-119",
                     cwe_name="Improper Restriction of Operations within Memory Buffer",
@@ -159,12 +159,9 @@ class NativeLibAnalyzer(BaseAnalyzer):
                     owasp_masvs_control="MSTG-CODE-9",
                     cvss_score=5.3,
                     remediation_commands=[
-                        "# Add to Android.mk",
-                        "LOCAL_CFLAGS += -fPIE -fPIC",
-                        "LOCAL_LDFLAGS += -pie",
-                        "",
-                        "# Or in CMakeLists.txt",
-                        "set(CMAKE_POSITION_INDEPENDENT_CODE ON)",
+                        {"type": "android", "command": "LOCAL_CFLAGS += -fPIE -fPIC", "description": "Add to Android.mk for PIE compilation"},
+                        {"type": "android", "command": "LOCAL_LDFLAGS += -pie", "description": "Add to Android.mk for PIE linking"},
+                        {"type": "cmake", "command": "set(CMAKE_POSITION_INDEPENDENT_CODE ON)", "description": "Or add to CMakeLists.txt"},
                     ],
                 ))
 
@@ -207,9 +204,9 @@ class NativeLibAnalyzer(BaseAnalyzer):
                         f"3. No __stack_chk_fail means no stack canaries"
                     ),
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"nm -D /tmp/extracted/{lib_full_path} | grep -i stack_chk || echo 'No stack canaries found'",
-                        f"readelf -s /tmp/extracted/{lib_full_path} | grep -i stack_chk",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract APK contents"},
+                        {"type": "bash", "command": f"nm -D /tmp/extracted/{lib_full_path} | grep -i stack_chk || echo 'No stack canaries found'", "description": "Check for stack canary symbols"},
+                        {"type": "bash", "command": f"readelf -s /tmp/extracted/{lib_full_path} | grep -i stack_chk", "description": "Verify stack protector presence"},
                     ],
                     cwe_id="CWE-121",
                     cwe_name="Stack-based Buffer Overflow",
@@ -217,11 +214,8 @@ class NativeLibAnalyzer(BaseAnalyzer):
                     owasp_masvs_control="MSTG-CODE-9",
                     cvss_score=5.3,
                     remediation_commands=[
-                        "# Add to Android.mk",
-                        "LOCAL_CFLAGS += -fstack-protector-all",
-                        "",
-                        "# Or for stronger protection",
-                        "LOCAL_CFLAGS += -fstack-protector-strong",
+                        {"type": "android", "command": "LOCAL_CFLAGS += -fstack-protector-all", "description": "Add to Android.mk for stack protection"},
+                        {"type": "android", "command": "LOCAL_CFLAGS += -fstack-protector-strong", "description": "Or use stronger protection"},
                     ],
                 ))
 
@@ -267,9 +261,9 @@ class NativeLibAnalyzer(BaseAnalyzer):
                         f"3. Check BIND_NOW: readelf -d extracted/{lib_full_path} | grep BIND_NOW"
                     ),
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"readelf -l /tmp/extracted/{lib_full_path} | grep -E 'GNU_RELRO|LOAD'",
-                        f"readelf -d /tmp/extracted/{lib_full_path} | grep -E 'BIND_NOW|FLAGS'",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract APK contents"},
+                        {"type": "bash", "command": f"readelf -l /tmp/extracted/{lib_full_path} | grep -E 'GNU_RELRO|LOAD'", "description": "Check for RELRO segment"},
+                        {"type": "bash", "command": f"readelf -d /tmp/extracted/{lib_full_path} | grep -E 'BIND_NOW|FLAGS'", "description": "Check for BIND_NOW flag"},
                     ],
                     cwe_id="CWE-119",
                     cwe_name="Improper Restriction of Operations within Memory Buffer",
@@ -277,11 +271,8 @@ class NativeLibAnalyzer(BaseAnalyzer):
                     owasp_masvs_control="MSTG-CODE-9",
                     cvss_score=4.3 if relro_status == "partial" else 5.3,
                     remediation_commands=[
-                        "# Add to Android.mk",
-                        "LOCAL_LDFLAGS += -Wl,-z,relro,-z,now",
-                        "",
-                        "# Or in CMakeLists.txt",
-                        "target_link_options(${TARGET} PRIVATE -Wl,-z,relro,-z,now)",
+                        {"type": "android", "command": "LOCAL_LDFLAGS += -Wl,-z,relro,-z,now", "description": "Add to Android.mk for full RELRO"},
+                        {"type": "cmake", "command": "target_link_options(${TARGET} PRIVATE -Wl,-z,relro,-z,now)", "description": "Or add to CMakeLists.txt"},
                     ],
                 ))
 
@@ -324,9 +315,9 @@ class NativeLibAnalyzer(BaseAnalyzer):
                         f"3. Look for 'RWE' (executable) vs 'RW ' (non-executable)"
                     ),
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"readelf -l /tmp/extracted/{lib_full_path} | grep -A1 GNU_STACK",
-                        f"execstack -q /tmp/extracted/{lib_full_path} 2>/dev/null || echo 'execstack not available'",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract APK contents"},
+                        {"type": "bash", "command": f"readelf -l /tmp/extracted/{lib_full_path} | grep -A1 GNU_STACK", "description": "Check stack executability (RWE=executable, RW=non-executable)"},
+                        {"type": "bash", "command": f"execstack -q /tmp/extracted/{lib_full_path} 2>/dev/null || echo 'execstack not available'", "description": "Alternative check with execstack tool"},
                     ],
                     cwe_id="CWE-119",
                     cwe_name="Improper Restriction of Operations within Memory Buffer",
@@ -334,10 +325,7 @@ class NativeLibAnalyzer(BaseAnalyzer):
                     owasp_masvs_control="MSTG-CODE-9",
                     cvss_score=7.5,
                     remediation_commands=[
-                        "# Add to Android.mk",
-                        "LOCAL_LDFLAGS += -Wl,-z,noexecstack",
-                        "",
-                        "# Should be default in modern toolchains",
+                        {"type": "android", "command": "LOCAL_LDFLAGS += -Wl,-z,noexecstack", "description": "Add to Android.mk to disable executable stack"},
                     ],
                 ))
 
@@ -380,8 +368,8 @@ class NativeLibAnalyzer(BaseAnalyzer):
                         f"3. Functions like __strcpy_chk indicate fortification"
                     ),
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"nm -D /tmp/extracted/{lib_full_path} | grep -E '_chk$' || echo 'No fortified functions found'",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract APK contents"},
+                        {"type": "bash", "command": f"nm -D /tmp/extracted/{lib_full_path} | grep -E '_chk$' || echo 'No fortified functions found'", "description": "Check for fortified function symbols"},
                     ],
                     cwe_id="CWE-120",
                     cwe_name="Buffer Copy without Checking Size of Input",
@@ -389,8 +377,7 @@ class NativeLibAnalyzer(BaseAnalyzer):
                     owasp_masvs_control="MSTG-CODE-9",
                     cvss_score=3.7,
                     remediation_commands=[
-                        "# Add to Android.mk",
-                        "LOCAL_CFLAGS += -D_FORTIFY_SOURCE=2 -O2",
+                        {"type": "android", "command": "LOCAL_CFLAGS += -D_FORTIFY_SOURCE=2 -O2", "description": "Add to Android.mk to enable FORTIFY_SOURCE"},
                     ],
                 ))
 

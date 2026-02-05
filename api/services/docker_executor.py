@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import docker
 from docker.errors import ContainerError, ImageNotFound
@@ -18,6 +18,22 @@ class DockerExecutor:
     def __init__(self):
         self.client = docker.from_env()
         self.network = "mobilicustos_mobilicustos"
+        import os
+        # Shared analyzer temp path - same on host and in container
+        self._analyzer_temp_path = os.environ.get("ANALYZER_TEMP_PATH", "/tmp/mobilicustos_analyzer")
+
+    def _container_to_host_path(self, container_path: Path) -> Path:
+        """Convert a container path to the corresponding host path.
+
+        For paths under ANALYZER_TEMP_PATH, no conversion needed as the path
+        is the same on host and in container (bind mount with same path).
+        """
+        path_str = str(container_path)
+        # Paths under analyzer temp are the same on host and in container
+        if path_str.startswith(self._analyzer_temp_path):
+            return container_path
+        # For other paths, return as-is (might need additional mappings)
+        return container_path
 
     async def run_analyzer(
         self,
@@ -27,8 +43,13 @@ class DockerExecutor:
         environment: dict[str, str] | None = None,
         timeout: int = 3600,
         memory_limit: str = "4g",
+        progress_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        """Run an analyzer container and return results."""
+        """Run an analyzer container and return results.
+
+        Args:
+            progress_callback: Optional callback(log_line: str) for streaming progress
+        """
         container_name = f"mobilicustos-analyzer-{uuid.uuid4().hex[:8]}"
 
         try:
@@ -45,6 +66,12 @@ class DockerExecutor:
                 detach=True,
                 remove=False,
             )
+
+            # Stream logs if callback provided
+            if progress_callback:
+                asyncio.create_task(
+                    self._stream_logs(container, progress_callback)
+                )
 
             # Wait for completion with timeout
             try:
@@ -85,6 +112,26 @@ class DockerExecutor:
             logger.error(f"Docker execution error: {e}")
             raise
 
+    async def _stream_logs(
+        self,
+        container,
+        callback: Callable[[str], None],
+    ) -> None:
+        """Stream container logs to a callback function."""
+        def _blocking_stream():
+            try:
+                for log_line in container.logs(stream=True, follow=True):
+                    decoded = log_line.decode("utf-8", errors="replace").strip()
+                    if decoded:
+                        try:
+                            callback(decoded)
+                        except Exception as e:
+                            logger.debug(f"Log callback error: {e}")
+            except Exception as e:
+                logger.debug(f"Log streaming ended: {e}")
+
+        await asyncio.to_thread(_blocking_stream)
+
     async def run_tool(
         self,
         tool_name: str,
@@ -96,19 +143,19 @@ class DockerExecutor:
         tool_configs = {
             "jadx": {
                 "image": "mobilicustos/jadx:latest",
-                "command": ["jadx", "-d", "/output", "/input/app"],
+                "command": ["jadx", "-d", "/output", "/input/{input_file}"],
             },
             "apktool": {
                 "image": "mobilicustos/apktool:latest",
-                "command": ["apktool", "d", "-o", "/output", "/input/app"],
+                "command": ["apktool", "d", "-o", "/output", "/input/{input_file}"],
             },
             "blutter": {
                 "image": "mobilicustos/blutter:latest",
-                "command": ["python", "/opt/blutter/blutter.py", "/input/app", "/output"],
+                "command": ["/input/{input_file}", "/output"],
             },
             "hermes-dec": {
                 "image": "mobilicustos/hermes-dec:latest",
-                "command": ["python", "/opt/hermes-dec/hbc_decompiler.py", "/input/bundle", "/output"],
+                "command": ["python", "/opt/hermes-dec/hbc_decompiler.py", "/input/{input_file}", "/output"],
             },
         }
 
@@ -116,11 +163,21 @@ class DockerExecutor:
             raise ValueError(f"Unknown tool: {tool_name}")
 
         config = tool_configs[tool_name]
-        command = config["command"] + (extra_args or [])
+
+        # Replace {input_file} placeholder with actual filename
+        input_filename = input_path.name
+        command = [
+            c.replace("{input_file}", input_filename) for c in config["command"]
+        ] + (extra_args or [])
+
+        # Map container paths to host paths for Docker volume mounts
+        # The API runs in a container but spawns sibling containers via host Docker
+        host_input_path = self._container_to_host_path(input_path.parent)
+        host_output_path = self._container_to_host_path(output_path)
 
         volumes = {
-            str(input_path.parent): {"bind": "/input", "mode": "ro"},
-            str(output_path): {"bind": "/output", "mode": "rw"},
+            str(host_input_path): {"bind": "/input", "mode": "ro"},
+            str(host_output_path): {"bind": "/output", "mode": "rw"},
         }
 
         # Ensure output directory exists

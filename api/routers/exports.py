@@ -25,17 +25,28 @@ async def export_findings(
     status: list[str] | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export findings for an app in various formats."""
-    # Verify app
-    result = await db.execute(
-        select(MobileApp).where(MobileApp.app_id == app_id)
-    )
-    app = result.scalar_one_or_none()
-    if not app:
-        raise HTTPException(status_code=404, detail="App not found")
+    """Export findings for an app in various formats.
+
+    Use app_id='all' to export findings across all apps.
+    """
+    app = None
+
+    # Handle 'all' app_id for exporting all findings
+    if app_id.lower() != "all":
+        # Verify app exists
+        result = await db.execute(
+            select(MobileApp).where(MobileApp.app_id == app_id)
+        )
+        app = result.scalar_one_or_none()
+        if not app:
+            raise HTTPException(status_code=404, detail="App not found")
 
     # Get findings
-    query = select(Finding).where(Finding.app_id == app_id)
+    if app_id.lower() == "all":
+        query = select(Finding)
+    else:
+        query = select(Finding).where(Finding.app_id == app_id)
+
     if severity:
         query = query.where(Finding.severity.in_(severity))
     if status:
@@ -52,21 +63,22 @@ async def export_findings(
         return _export_sarif(app, findings)
 
 
-def _export_json(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
+def _export_json(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
     """Export findings as JSON."""
     data = {
         "app": {
-            "app_id": app.app_id,
-            "package_name": app.package_name,
-            "app_name": app.app_name,
-            "platform": app.platform,
-            "version": app.version_name,
-        },
+            "app_id": app.app_id if app else "all",
+            "package_name": app.package_name if app else "all_apps",
+            "app_name": app.app_name if app else "All Applications",
+            "platform": app.platform if app else "mixed",
+            "version": app.version_name if app else None,
+        } if app else None,
         "exported_at": datetime.utcnow().isoformat(),
         "total_findings": len(findings),
         "findings": [
             {
                 "finding_id": f.finding_id,
+                "app_id": f.app_id,
                 "title": f.title,
                 "severity": f.severity,
                 "status": f.status,
@@ -87,25 +99,26 @@ def _export_json(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
         ],
     }
 
+    filename = f"{app.package_name}_findings.json" if app else "all_findings.json"
     content = json.dumps(data, indent=2)
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="application/json",
         headers={
-            "Content-Disposition": f"attachment; filename={app.package_name}_findings.json"
+            "Content-Disposition": f"attachment; filename={filename}"
         },
     )
 
 
-def _export_csv(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
+def _export_csv(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
     """Export findings as CSV."""
     import csv
 
     output = io.StringIO()
     writer = csv.writer(output)
 
-    # Header
-    writer.writerow([
+    # Header - include App ID when exporting all apps
+    header = [
         "Finding ID",
         "Title",
         "Severity",
@@ -120,11 +133,14 @@ def _export_csv(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
         "Description",
         "Impact",
         "Remediation",
-    ])
+    ]
+    if not app:
+        header.insert(1, "App ID")
+    writer.writerow(header)
 
     # Data
     for f in findings:
-        writer.writerow([
+        row = [
             f.finding_id,
             f.title,
             f.severity,
@@ -139,19 +155,23 @@ def _export_csv(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
             f.description[:200] if f.description else "",  # Truncate for CSV
             f.impact[:200] if f.impact else "",
             f.remediation[:200] if f.remediation else "",
-        ])
+        ]
+        if not app:
+            row.insert(1, f.app_id)
+        writer.writerow(row)
 
+    filename = f"{app.package_name}_findings.csv" if app else "all_findings.csv"
     content = output.getvalue()
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename={app.package_name}_findings.csv"
+            "Content-Disposition": f"attachment; filename={filename}"
         },
     )
 
 
-def _export_sarif(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
+def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
     """Export findings in SARIF format (Static Analysis Results Interchange Format)."""
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -208,12 +228,13 @@ def _export_sarif(app: MobileApp, findings: list[Finding]) -> StreamingResponse:
 
     sarif["runs"][0]["tool"]["driver"]["rules"] = list(rules_map.values())
 
+    filename = f"{app.package_name}_findings.sarif" if app else "all_findings.sarif"
     content = json.dumps(sarif, indent=2)
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="application/json",
         headers={
-            "Content-Disposition": f"attachment; filename={app.package_name}_findings.sarif"
+            "Content-Disposition": f"attachment; filename={filename}"
         },
     )
 

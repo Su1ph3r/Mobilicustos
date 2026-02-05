@@ -151,9 +151,9 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence=f"Jailbreak detection indicators ({len(jailbreak_indicators)}):\n" + "\n".join(f"• {ind}" for ind in jailbreak_indicators),
                     poc_verification="1. Extract IPA\n2. Run strings on binary\n3. Search for jailbreak paths",
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep -i cydia",
-                        "# Bypass with Frida: frida -U -l jailbreak_bypass.js <app>",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract IPA contents"},
+                        {"type": "bash", "command": f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep -i cydia", "description": "Search for jailbreak indicators"},
+                        {"type": "frida", "command": "frida -U -l jailbreak_bypass.js <app>", "description": "Bypass jailbreak detection with Frida"},
                     ],
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-2",
@@ -183,8 +183,8 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence=f"Insecure HTTP URLs ({len(insecure_urls)}):\n" + "\n".join(f"• {url}" for url in insecure_urls),
                     poc_verification="1. Extract IPA\n2. Run strings on binary\n3. Grep for http://",
                     poc_commands=[
-                        f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep 'http://'",
-                        "# Intercept traffic with: mitmproxy -p 8080",
+                        {"type": "bash", "command": f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep 'http://'", "description": "Find insecure HTTP URLs"},
+                        {"type": "bash", "command": "mitmproxy -p 8080", "description": "Intercept traffic with mitmproxy"},
                     ],
                     owasp_masvs_category="MASVS-NETWORK",
                     owasp_masvs_control="MASVS-NETWORK-1",
@@ -238,9 +238,9 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     "2. Run strings on binary: strings Payload/*.app/<binary>\n"
                     "3. Search for patterns: grep -i 'api_key\\|secret\\|password'",
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep -iE 'api_key|apikey|secret|password|private_key|bearer'",
-                        "# Extract with Frida: frida -U -l dump_keychain.js <app>",
+                        {"type": "bash", "command": f"unzip -o {app.file_path} -d /tmp/extracted", "description": "Extract IPA contents"},
+                        {"type": "bash", "command": f"strings /tmp/extracted/Payload/*.app/{binary_name} | grep -iE 'api_key|apikey|secret|password|private_key|bearer'", "description": "Search for hardcoded secrets"},
+                        {"type": "frida", "command": "frida -U -l dump_keychain.js <app>", "description": "Extract secrets with Frida keychain dump"},
                     ],
                     owasp_masvs_category="MASVS-STORAGE",
                     owasp_masvs_control="MASVS-STORAGE-1",
@@ -274,8 +274,8 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence="cryptid is 0 - binary is not encrypted",
                     poc_verification="1. Run otool on binary\n2. Check LC_ENCRYPTION_INFO load command\n3. Verify cryptid value",
                     poc_commands=[
-                        f"otool -l /tmp/extracted/Payload/*.app/{binary_name} | grep -A4 LC_ENCRYPTION_INFO",
-                        "# If encrypted, decrypt with: frida-ios-dump <app>",
+                        {"type": "bash", "command": f"otool -l /tmp/extracted/Payload/*.app/{binary_name} | grep -A4 LC_ENCRYPTION_INFO", "description": "Check encryption status"},
+                        {"type": "frida", "command": "frida-ios-dump <app>", "description": "Decrypt binary if encrypted"},
                     ],
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-3",
@@ -308,7 +308,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                             poc_evidence=f"Library {dangerous} is linked",
                             poc_verification="1. Run otool -L on binary\n2. Check linked libraries",
                             poc_commands=[
-                                f"otool -L /tmp/extracted/Payload/*.app/{binary_name}",
+                                {"type": "bash", "command": f"otool -L /tmp/extracted/Payload/*.app/{binary_name}", "description": "List linked libraries"},
                             ],
                             owasp_masvs_category="MASVS-CODE",
                         )
@@ -334,7 +334,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence="PIE flag not found in Mach-O header",
                     poc_verification="1. Run otool -hv on binary\n2. Check for PIE flag in output",
                     poc_commands=[
-                        f"otool -hv /tmp/extracted/Payload/*.app/{binary_name} | grep PIE",
+                        {"type": "bash", "command": f"otool -hv /tmp/extracted/Payload/*.app/{binary_name} | grep PIE", "description": "Check for PIE flag in Mach-O header"},
                     ],
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-4",
@@ -359,7 +359,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence="Stack canary symbols not found",
                     poc_verification="1. Run nm on binary\n2. Search for stack_chk symbols",
                     poc_commands=[
-                        f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep stack_chk",
+                        {"type": "bash", "command": f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep stack_chk", "description": "Check for stack canary symbols"},
                     ],
                     owasp_masvs_category="MASVS-CODE",
                     owasp_masvs_control="MASVS-CODE-4",
@@ -395,7 +395,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                         poc_evidence=f"Symbol {func} found in binary",
                         poc_verification=f"1. Run nm on binary\n2. Search for {func}",
                         poc_commands=[
-                            f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep -i '{func}'",
+                            {"type": "bash", "command": f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep -i '{func}'", "description": f"Search for {func} symbol"},
                         ],
                         owasp_masvs_category="MASVS-CODE",
                         owasp_masvs_control="MASVS-CODE-4",
@@ -426,8 +426,8 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence=f"Anti-debug functions: {', '.join(anti_debug_found)}",
                     poc_verification="1. Run nm on binary\n2. Search for ptrace, sysctl symbols",
                     poc_commands=[
-                        f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep -E 'ptrace|sysctl'",
-                        "# Bypass with Frida: frida -U -l anti_debug_bypass.js <app>",
+                        {"type": "bash", "command": f"nm /tmp/extracted/Payload/*.app/{binary_name} | grep -E 'ptrace|sysctl'", "description": "Search for anti-debug symbols"},
+                        {"type": "frida", "command": "frida -U -l anti_debug_bypass.js <app>", "description": "Bypass anti-debugging with Frida"},
                     ],
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-2",
@@ -490,7 +490,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                         poc_evidence=f"Sensitive classes containing '{pattern}' ({len(matching)}):\n" + "\n".join(f"• {c}" for c in matching),
                         poc_verification="1. Run class-dump on binary\n2. Search for sensitive class names",
                         poc_commands=[
-                            f"class-dump /tmp/extracted/Payload/*.app/{binary_name} | grep -i '{pattern}'",
+                            {"type": "bash", "command": f"class-dump /tmp/extracted/Payload/*.app/{binary_name} | grep -i '{pattern}'", "description": f"Search for {pattern} classes"},
                         ],
                         owasp_masvs_category="MASVS-STORAGE",
                     )
@@ -517,7 +517,7 @@ class iOSBinaryAnalyzer(BaseAnalyzer):
                     poc_evidence=f"WebView classes: {', '.join(webviews)}",
                     poc_verification="1. Run class-dump on binary\n2. Search for WebView classes\n3. Check for UIWebView (deprecated)",
                     poc_commands=[
-                        f"class-dump /tmp/extracted/Payload/*.app/{binary_name} | grep -E 'WKWebView|UIWebView'",
+                        {"type": "bash", "command": f"class-dump /tmp/extracted/Payload/*.app/{binary_name} | grep -E 'WKWebView|UIWebView'", "description": "Search for WebView usage"},
                     ],
                     owasp_masvs_category="MASVS-PLATFORM",
                     owasp_masvs_control="MASVS-PLATFORM-2",

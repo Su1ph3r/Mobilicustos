@@ -429,8 +429,8 @@ Java.perform(function() {{
                             poc_evidence=f"Custom URL scheme '{scheme}://' registered for activity {name}",
                             poc_verification=f"1. Create test HTML: <a href=\"{scheme}://test\">Test</a>\n2. Open on device\n3. Verify app opens",
                             poc_commands=[
-                                f"adb shell am start -W -a android.intent.action.VIEW -d '{scheme}://test'",
-                                f"aapt dump badging {app.file_path} | grep -i scheme",
+                                {"type": "adb", "command": f"adb shell am start -W -a android.intent.action.VIEW -d '{scheme}://test'", "description": "Test deep link handler"},
+                                {"type": "bash", "command": f"aapt dump badging {app.file_path} | grep -i scheme", "description": "List registered URL schemes"},
                             ],
                             owasp_masvs_category="MASVS-PLATFORM",
                             owasp_masvs_control="MASVS-PLATFORM-2",
@@ -528,8 +528,8 @@ Java.perform(function() {{
                 poc_evidence=f"Dangerous permissions found: {', '.join(p[0].split('.')[-1] for p in requested_perms)}",
                 poc_verification="1. Extract AndroidManifest.xml from APK\n2. Search for <uses-permission> tags\n3. Identify dangerous permissions",
                 poc_commands=[
-                    f"aapt dump permissions {app.file_path}",
-                    "aapt dump badging app.apk | grep -i permission",
+                    {"type": "bash", "command": f"aapt dump permissions {app.file_path}", "description": "List all requested permissions"},
+                    {"type": "bash", "command": f"aapt dump badging {app.file_path} | grep -i permission", "description": "Show permission details from APK"},
                 ],
                 owasp_masvs_category="MASVS-PRIVACY",
                 owasp_masvs_control="MASVS-PRIVACY-1",
@@ -575,8 +575,7 @@ Java.perform(function() {{
                         poc_evidence=f"Activity {name} with launchMode={launch_mode} and {'no' if task_affinity is None else 'default'} taskAffinity",
                         poc_verification="1. Create PoC app with same taskAffinity\n2. Launch target app\n3. Launch PoC app\n4. Verify PoC appears in target's task stack",
                         poc_commands=[
-                            f"adb shell dumpsys activity activities | grep -A5 {app.package_name}",
-                            "# Check task affinity and stack behavior",
+                            {"type": "adb", "command": f"adb shell dumpsys activity activities | grep -A5 {app.package_name}", "description": "Check task affinity and stack behavior"},
                         ],
                         cwe_id="CWE-1021",
                         cwe_name="Improper Restriction of Rendered UI Layers",

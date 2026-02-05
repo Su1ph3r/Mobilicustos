@@ -16,7 +16,7 @@ RUN curl -fsSL https://get.docker.com | sh
 
 # Copy and install Python dependencies
 COPY api/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Copy API code
 COPY api/ /app/api/

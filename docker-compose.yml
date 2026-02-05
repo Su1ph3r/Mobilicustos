@@ -71,10 +71,14 @@ services:
       - NEO4J_USER=${NEO4J_USER:-neo4j}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-changeme}
       - REDIS_URL=redis://redis:6379
+      # Host temp path for analyzer containers (must exist on host and be writable)
+      - ANALYZER_TEMP_PATH=/tmp/mobilicustos_analyzer
     volumes:
       - ./api:/app/api:ro
       - ./uploads:/app/uploads
       - ./reports:/app/reports
+      # Shared temp directory for analyzer files (same path in container and on host)
+      - /tmp/mobilicustos_analyzer:/tmp/mobilicustos_analyzer
       # Docker socket: Use DOCKER_SOCKET_PATH env var for Windows compatibility
       # Windows: set DOCKER_SOCKET_PATH=//var/run/docker.sock or //./pipe/docker_engine
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock

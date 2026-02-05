@@ -62,21 +62,40 @@ class FlutterAnalyzer(BaseAnalyzer):
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 if platform == "android":
-                    # Find libapp.so
-                    for name in archive.namelist():
-                        if name.endswith("libapp.so"):
-                            # Extract to temp directory
-                            temp_dir = Path(tempfile.mkdtemp())
-                            archive.extract(name, temp_dir)
-                            return temp_dir / name
+                    # Find libapp.so (prefer arm64)
+                    libapp_files = [n for n in archive.namelist() if n.endswith("libapp.so")]
+                    # Prefer arm64-v8a
+                    target_file = None
+                    for f in libapp_files:
+                        if "arm64-v8a" in f:
+                            target_file = f
+                            break
+                    if not target_file and libapp_files:
+                        target_file = libapp_files[0]
+
+                    if target_file:
+                        # Extract to shared analyzer temp directory (accessible by sibling containers)
+                        import hashlib
+                        import os
+                        archive_hash = hashlib.md5(str(archive_path).encode()).hexdigest()[:8]
+                        analyzer_temp = os.environ.get("ANALYZER_TEMP_PATH", "/tmp/mobilicustos_analyzer")
+                        extract_dir = Path(analyzer_temp) / f"blutter_extract_{archive_hash}"
+                        extract_dir.mkdir(parents=True, exist_ok=True)
+                        archive.extract(target_file, extract_dir)
+                        return extract_dir / target_file
 
                 elif platform == "ios":
                     # Find App.framework/App
                     for name in archive.namelist():
                         if "App.framework/App" in name:
-                            temp_dir = Path(tempfile.mkdtemp())
-                            archive.extract(name, temp_dir)
-                            return temp_dir / name
+                            import hashlib
+                            import os
+                            archive_hash = hashlib.md5(str(archive_path).encode()).hexdigest()[:8]
+                            analyzer_temp = os.environ.get("ANALYZER_TEMP_PATH", "/tmp/mobilicustos_analyzer")
+                            extract_dir = Path(analyzer_temp) / f"blutter_extract_{archive_hash}"
+                            extract_dir.mkdir(parents=True, exist_ok=True)
+                            archive.extract(name, extract_dir)
+                            return extract_dir / name
 
         except Exception as e:
             logger.error(f"Failed to extract Flutter binary: {e}")
@@ -180,9 +199,9 @@ class FlutterAnalyzer(BaseAnalyzer):
                         poc_evidence=f"Found via Blutter analysis: {func}",
                         poc_verification=f"1. Extract {'APK' if app.platform == 'android' else 'IPA'}\n2. Run Blutter on {lib_file}\n3. Search for function: {pattern}",
                         poc_commands=[
-                            f"unzip {app.file_path} -d /tmp/extracted",
-                            f"blutter /tmp/extracted/{'lib/arm64-v8a/libapp.so' if app.platform == 'android' else 'Payload/*.app/Frameworks/App.framework/App'} /tmp/blutter_out",
-                            f"grep -rn '{pattern}' /tmp/blutter_out/",
+                            {"type": "bash", "command": f"unzip {app.file_path} -d /tmp/extracted", "description": "Extract application archive"},
+                            {"type": "bash", "command": f"blutter /tmp/extracted/{'lib/arm64-v8a/libapp.so' if app.platform == 'android' else 'Payload/*.app/Frameworks/App.framework/App'} /tmp/blutter_out", "description": "Run Blutter on Flutter binary"},
+                            {"type": "bash", "command": f"grep -rn '{pattern}' /tmp/blutter_out/", "description": "Search for sensitive pattern in Blutter output"},
                         ],
                         owasp_masvs_category="MASVS-CODE",
                     ))
@@ -215,8 +234,8 @@ class FlutterAnalyzer(BaseAnalyzer):
                         poc_evidence=f"String: {string[:50]}...",
                         poc_verification="1. Extract app binary\n2. Run strings or Blutter\n3. Search for sensitive patterns",
                         poc_commands=[
-                            f"strings /tmp/extracted/{'lib/arm64-v8a/libapp.so' if app.platform == 'android' else 'Payload/*.app/Frameworks/App.framework/App'} | grep -i api",
-                            "strings /tmp/extracted/libapp.so | grep -E 'http|api_key|token'",
+                            {"type": "bash", "command": f"strings /tmp/extracted/{'lib/arm64-v8a/libapp.so' if app.platform == 'android' else 'Payload/*.app/Frameworks/App.framework/App'} | grep -i api", "description": "Extract and search strings for API references"},
+                            {"type": "bash", "command": "strings /tmp/extracted/libapp.so | grep -E 'http|api_key|token'", "description": "Search for sensitive patterns in strings"},
                         ],
                         owasp_masvs_category="MASVS-STORAGE",
                     ))
@@ -258,8 +277,8 @@ class FlutterAnalyzer(BaseAnalyzer):
                         poc_evidence="vm_snapshot_data file found - indicates debug/profile build",
                         poc_verification="1. Unzip APK/IPA\n2. Check for vm_snapshot_data file\n3. Debug builds contain Dart VM",
                         poc_commands=[
-                            f"unzip -l {app.file_path} | grep vm_snapshot",
-                            "unzip -l app.apk | grep flutter_assets",
+                            {"type": "bash", "command": f"unzip -l {app.file_path} | grep vm_snapshot", "description": "Check for VM snapshot file (debug mode indicator)"},
+                            {"type": "bash", "command": "unzip -l app.apk | grep flutter_assets", "description": "List flutter assets in archive"},
                         ],
                         owasp_masvs_category="MASVS-RESILIENCE",
                         owasp_masvs_control="MASVS-RESILIENCE-1",
@@ -285,9 +304,9 @@ class FlutterAnalyzer(BaseAnalyzer):
                         poc_evidence=f"{assets_count} flutter_assets files found",
                         poc_verification="1. Unzip APK/IPA\n2. Browse flutter_assets directory\n3. Check for config files, JSON, strings",
                         poc_commands=[
-                            f"unzip {app.file_path} -d /tmp/extracted",
-                            "ls -la /tmp/extracted/assets/flutter_assets/",
-                            "cat /tmp/extracted/assets/flutter_assets/*.json 2>/dev/null || true",
+                            {"type": "bash", "command": f"unzip {app.file_path} -d /tmp/extracted", "description": "Extract application archive"},
+                            {"type": "bash", "command": "ls -la /tmp/extracted/assets/flutter_assets/", "description": "List flutter assets directory"},
+                            {"type": "bash", "command": "cat /tmp/extracted/assets/flutter_assets/*.json 2>/dev/null || true", "description": "Check for config files in flutter assets"},
                         ],
                         owasp_masvs_category="MASVS-RESILIENCE",
                     ))

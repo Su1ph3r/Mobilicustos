@@ -77,16 +77,25 @@ const handleSortChange = ({ field, order }: { field: string; order: number }) =>
 
 const exportCsv = async () => {
   try {
-    const response = await exportsApi.exportFindings('all', 'csv', {
-      include_remediation: true,
-      include_poc: true,
-    })
+    // Use app_id from filters, or 'all' for all apps
+    const appId = findingsStore.filters.app_id || 'all'
+
+    // Build export params from current filters
+    const exportParams: Record<string, any> = {}
+    if (findingsStore.filters.severity?.length) {
+      exportParams.severity = findingsStore.filters.severity
+    }
+    if (findingsStore.filters.status?.length) {
+      exportParams.status = findingsStore.filters.status
+    }
+
+    const response = await exportsApi.exportFindings(appId, 'csv', exportParams)
 
     const blob = new Blob([response.data], { type: 'text/csv' })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = 'findings.csv'
+    link.download = appId === 'all' ? 'all_findings.csv' : `${appId}_findings.csv`
     link.click()
     window.URL.revokeObjectURL(url)
 

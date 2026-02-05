@@ -137,9 +137,14 @@ class ScanOrchestrator:
                         self.db.add(finding)
                         self.findings.append(finding)
 
-                        # Also create Secret entry for secret_scanner findings
-                        if analyzer_name == "secret_scanner" and finding.category == "Secrets":
-                            self._create_secret_from_finding(finding, scan)
+                    # Flush findings to database before creating secrets (foreign key constraint)
+                    await self.db.flush()
+
+                    # Create Secret entries for secret_scanner findings
+                    if analyzer_name == "secret_scanner":
+                        for finding in findings:
+                            if finding.category == "Secrets":
+                                self._create_secret_from_finding(finding, scan)
 
                 except Exception as e:
                     logger.error(f"Analyzer {analyzer_name} failed: {e}")
