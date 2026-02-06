@@ -28,7 +28,7 @@ class TestBypassRouter:
 
     def test_attempt_bypass_validation(self, client: TestClient):
         """Test bypass attempt with incomplete data."""
-        response = client.post("/api/bypass/attempt", json={
+        response = client.post("/api/bypass/attempt", params={
             "app_id": "test-app-123",
             # Missing device_id and detection_type
         })

@@ -221,6 +221,10 @@ class ScanOrchestrator:
                     # Flush findings to database before creating secrets (foreign key constraint)
                     await self.db.flush()
 
+                    # Update live findings count so progress endpoint shows real-time data
+                    scan.findings_count = self._count_findings()
+                    await self.db.commit()
+
                     # Create Secret entries for secret_scanner findings
                     if analyzer_name == "secret_scanner":
                         for finding in findings:
@@ -233,6 +237,7 @@ class ScanOrchestrator:
                     scan.analyzer_errors = scan.analyzer_errors + [
                         {"analyzer": analyzer_name, "error": str(e)[:200]}
                     ]
+                    await self.db.commit()
 
             # Update scan completion
             scan.status = "completed"

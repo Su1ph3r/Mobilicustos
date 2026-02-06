@@ -204,6 +204,27 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
 ]
 
 
+# Provider-prefixed patterns that are high-confidence (skip entropy check)
+_HIGH_CONFIDENCE_PREFIXES = {"AKIA", "AIza", "ghp_", "gho_", "sk_live_", "pk_live_", "xox", "AAAA", "-----BEGIN"}
+
+# False positive indicator strings — if the matched value contains any of these, skip it
+_FALSE_POSITIVE_INDICATORS = [
+    "example", "placeholder", "your_", "insert_", "replace_", "todo",
+    "changeme", "password123", "test", "dummy", "sample", "xxxxxx",
+    "000000", "111111", "aaaaaa",
+]
+
+# Files that commonly contain SDK config (not real secrets)
+_SKIP_FILE_PATTERNS = [
+    "google-services.json",
+    "build.gradle",
+    "Podfile.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "gradle-wrapper.properties",
+]
+
+
 class SecretScanner(BaseAnalyzer):
     """Scans mobile application archives for hardcoded secrets and credentials.
 
@@ -295,6 +316,11 @@ class SecretScanner(BaseAnalyzer):
                     if ext not in scannable_extensions:
                         continue
 
+                    # Skip known SDK/library config files
+                    basename = Path(file_info.filename).name
+                    if basename in _SKIP_FILE_PATTERNS:
+                        continue
+
                     try:
                         content = archive.read(file_info.filename).decode(
                             "utf-8", errors="ignore"
@@ -320,7 +346,8 @@ class SecretScanner(BaseAnalyzer):
 
         For each match, determines the line number, extracts surrounding
         context lines, and creates a redacted/hashed representation of
-        the secret value.
+        the secret value. Applies entropy filtering and false positive
+        detection to reduce noise.
 
         Args:
             content: Decoded text content of the file.
@@ -336,6 +363,25 @@ class SecretScanner(BaseAnalyzer):
             pattern = re.compile(pattern_def["pattern"])
 
             for match in pattern.finditer(content):
+                # Use the innermost capture group (the actual secret value)
+                secret_value = match.group(match.lastindex) if match.lastindex else match.group(0)
+
+                # Determine if this is a high-confidence provider-prefixed match
+                is_high_confidence = any(
+                    secret_value.startswith(prefix) for prefix in _HIGH_CONFIDENCE_PREFIXES
+                )
+
+                # False positive check — only apply to non-provider-prefixed matches
+                if not is_high_confidence:
+                    value_lower = secret_value.lower()
+                    if any(fp in value_lower for fp in _FALSE_POSITIVE_INDICATORS):
+                        continue
+
+                    # Entropy check for generic patterns
+                    entropy = self._calculate_entropy(secret_value)
+                    if entropy < 3.0:
+                        continue
+
                 # Get line number
                 line_start = content[:match.start()].count("\n") + 1
 
@@ -345,15 +391,23 @@ class SecretScanner(BaseAnalyzer):
                 context_end = min(len(lines), line_start + 2)
                 context = "\n".join(lines[context_start:context_end])
 
-                # Redact the secret
-                secret_value = match.group(0)
-                redacted = self._redact_secret(secret_value)
+                # Redact the full match for display
+                redacted = self._redact_secret(match.group(0))
+
+                # Confidence and severity: high-confidence keeps original,
+                # medium-confidence downgrades by one level
+                confidence = "high" if is_high_confidence else "medium"
+                severity = pattern_def["severity"]
+                if not is_high_confidence:
+                    _DOWNGRADE = {"critical": "high", "high": "medium", "medium": "low", "low": "info"}
+                    severity = _DOWNGRADE.get(severity, severity)
 
                 secrets.append({
                     "name": pattern_def["name"],
                     "type": pattern_def["type"],
                     "provider": pattern_def["provider"],
-                    "severity": pattern_def["severity"],
+                    "severity": severity,
+                    "confidence": confidence,
                     "file_path": file_path,
                     "line_number": line_start,
                     "context": context,
@@ -362,6 +416,25 @@ class SecretScanner(BaseAnalyzer):
                 })
 
         return secrets
+
+    def _calculate_entropy(self, data: str) -> float:
+        """Calculate Shannon entropy of a string.
+
+        Args:
+            data: Input string to measure.
+
+        Returns:
+            Entropy in bits. Low-entropy (< 3.0) values are likely
+            placeholders or repetitive strings.
+        """
+        from collections import Counter
+        import math
+
+        if not data:
+            return 0.0
+        counts = Counter(data)
+        length = len(data)
+        return -sum((c / length) * math.log2(c / length) for c in counts.values())
 
     def _redact_secret(self, secret: str) -> str:
         """Redact a secret value for safe display in findings.

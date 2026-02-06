@@ -125,10 +125,8 @@ class MobilicustosClient {
   }
 
   async attemptBypass(appId: string, deviceId: string, detectionType: string) {
-    const response = await this.client.post("/bypass/attempt", {
-      app_id: appId,
-      device_id: deviceId,
-      detection_type: detectionType,
+    const response = await this.client.post("/bypass/attempt", null, {
+      params: { app_id: appId, device_id: deviceId, detection_type: detectionType },
     });
     return response.data;
   }

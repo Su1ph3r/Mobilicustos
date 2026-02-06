@@ -184,6 +184,7 @@ async def get_app_compliance(
                 "high": 0,
                 "medium": 0,
                 "low": 0,
+                "info": 0,
                 "open": 0,
                 "remediated": 0,
             },

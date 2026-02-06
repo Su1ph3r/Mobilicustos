@@ -113,7 +113,7 @@ export const fridaApi = {
 export const bypassApi = {
   listResults: (params?: Record<string, any>) => api.get('/bypass/results', { params }),
   analyzeProtections: (appId: string) => api.post('/bypass/analyze', null, { params: { app_id: appId } }),
-  attemptBypass: (data: Record<string, any>) => api.post('/bypass/attempt', data),
+  attemptBypass: (data: Record<string, any>) => api.post('/bypass/attempt', null, { params: data }),
   autoBypass: (appId: string, deviceId: string) =>
     api.post('/bypass/auto-bypass', null, { params: { app_id: appId, device_id: deviceId } }),
   getDetectionTypes: () => api.get('/bypass/detection-types'),
