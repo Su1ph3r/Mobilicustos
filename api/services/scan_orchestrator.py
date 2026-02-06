@@ -92,8 +92,9 @@ async def run_scan(scan_id: UUID) -> None:
         except Exception as e:
             logger.error(f"Scan failed: {e}")
             try:
+                await db.rollback()
                 scan.status = "failed"
-                scan.error_message = str(e)
+                scan.error_message = str(e)[:500]
                 scan.completed_at = datetime.utcnow()
                 await db.commit()
             except Exception as commit_error:
@@ -132,8 +133,11 @@ class ScanOrchestrator:
                     logger.info(f"Running analyzer: {analyzer_name}")
                     findings = await self._run_analyzer(analyzer_name, app)
 
-                    # Save findings
+                    # Save findings — set scan_id and make finding_id unique per scan
                     for finding in findings:
+                        finding.scan_id = scan.scan_id
+                        # Append scan_id to finding_id to prevent collisions across scans
+                        finding.finding_id = f"{finding.finding_id}-{str(scan.scan_id)[:8]}"
                         self.db.add(finding)
                         self.findings.append(finding)
 
@@ -148,8 +152,9 @@ class ScanOrchestrator:
 
                 except Exception as e:
                     logger.error(f"Analyzer {analyzer_name} failed: {e}")
+                    await self.db.rollback()
                     scan.analyzer_errors = scan.analyzer_errors + [
-                        {"analyzer": analyzer_name, "error": str(e)}
+                        {"analyzer": analyzer_name, "error": str(e)[:200]}
                     ]
 
             # Update scan completion
@@ -167,8 +172,9 @@ class ScanOrchestrator:
             logger.info(f"Scan completed: {len(self.findings)} findings")
 
         except Exception as e:
+            await self.db.rollback()
             scan.status = "failed"
-            scan.error_message = str(e)
+            scan.error_message = str(e)[:500]
             scan.completed_at = datetime.utcnow()
             await self.db.commit()
             raise
@@ -178,19 +184,19 @@ class ScanOrchestrator:
         if scan.analyzers_enabled:
             return scan.analyzers_enabled
 
-        # Default analyzers based on platform
+        if scan.scan_type == "dynamic":
+            # Dynamic scans run only dynamic analyzers
+            return ["runtime_analyzer", "network_analyzer"]
+
+        # Static / full scans: platform-specific static analyzers
         analyzers = STATIC_ANALYZERS.get(app.platform, []).copy()
 
         # Add cross-platform analyzers if applicable
         if app.framework in ("flutter", "react_native", "xamarin", "maui"):
             analyzers.extend(STATIC_ANALYZERS.get("cross_platform", []))
 
-        # Filter for scan type
-        if scan.scan_type == "static":
-            # Remove dynamic-only analyzers
-            pass
-        elif scan.scan_type == "dynamic":
-            # Add dynamic analyzers
+        # Full scans include both static and dynamic
+        if scan.scan_type == "full":
             analyzers.extend(["runtime_analyzer", "network_analyzer"])
 
         return analyzers
@@ -254,6 +260,12 @@ class ScanOrchestrator:
             elif analyzer_name == "data_leakage_analyzer":
                 from api.services.analyzers.data_leakage_analyzer import DataLeakageAnalyzer
                 analyzer = DataLeakageAnalyzer()
+            elif analyzer_name == "runtime_analyzer":
+                from api.services.analyzers.runtime_analyzer import RuntimeAnalyzer
+                analyzer = RuntimeAnalyzer()
+            elif analyzer_name == "network_analyzer":
+                from api.services.analyzers.network_analyzer import NetworkAnalyzer
+                analyzer = NetworkAnalyzer()
             else:
                 logger.warning(f"Unknown analyzer: {analyzer_name}")
                 return []

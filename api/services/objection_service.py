@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from api.services.device_manager import _validate_device_id
+
 logger = logging.getLogger(__name__)
 
 # Validate package names to prevent command injection
@@ -307,6 +309,7 @@ class ObjectionService:
         platform: str,
     ) -> dict[str, Any]:
         """Start an Objection session."""
+        device_id = _validate_device_id(device_id)
         if not _validate_package_name(package_name):
             return {
                 "status": "error",

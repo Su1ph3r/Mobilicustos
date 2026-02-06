@@ -22,6 +22,8 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.services.device_manager import _validate_device_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,7 @@ class ScreenCaptureService:
         description: Optional[str] = None,
     ) -> dict:
         """Capture a screenshot from a device."""
+        device_id = _validate_device_id(device_id)
         capture_id = str(uuid4())
         filename = f"{capture_id}.png"
         filepath = self.storage_path / filename
@@ -95,6 +98,7 @@ class ScreenCaptureService:
         max_duration: int = 180,
     ) -> dict:
         """Start screen recording on a device."""
+        device_id = _validate_device_id(device_id)
         recording_id = str(uuid4())
         filename = f"{recording_id}.mp4"
         filepath = self.storage_path / filename
@@ -251,6 +255,7 @@ class ScreenCaptureService:
         app_id: Optional[str] = None,
     ) -> dict:
         """Capture UI hierarchy dump."""
+        device_id = _validate_device_id(device_id)
         capture_id = str(uuid4())
         filename = f"{capture_id}_ui.xml"
         filepath = self.storage_path / filename
@@ -340,6 +345,7 @@ class ScreenCaptureService:
         app_id: Optional[str] = None,
     ) -> dict:
         """Capture screenshot from iOS device using idevicescreenshot."""
+        device_id = _validate_device_id(device_id)
         capture_id = str(uuid4())
         filename = f"{capture_id}.png"
         filepath = self.storage_path / filename
@@ -377,6 +383,7 @@ class ScreenCaptureService:
 
     async def _run_adb_command(self, device_id: str, args: list[str]) -> str:
         """Run an ADB command safely."""
+        device_id = _validate_device_id(device_id)
         cmd = ["adb", "-s", device_id] + args
 
         def run_cmd():
@@ -450,6 +457,7 @@ class ScreenCaptureService:
 
     async def _run_ios_screenshot(self, device_id: str, output_path: str):
         """Capture iOS screenshot."""
+        device_id = _validate_device_id(device_id)
         def run_cmd():
             result = subprocess.run(
                 ["idevicescreenshot", "-u", device_id, output_path],

@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from api.services.device_manager import _validate_device_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,11 +178,55 @@ def _validate_module_name(module: str) -> bool:
     return module in BUILTIN_MODULES
 
 
+DROZER_AGENT_APK_PATH = "/app/tools/drozer-agent.apk"
+
+
 class DrozerService:
     """Service for interacting with Drozer."""
 
     def __init__(self):
         self.active_sessions: dict[str, dict] = {}
+
+    async def install_agent(self, device_id: str) -> dict[str, Any]:
+        """Install drozer agent APK on a device via ADB."""
+        device_id = _validate_device_id(device_id)
+
+        import os
+        if not os.path.exists(DROZER_AGENT_APK_PATH):
+            return {
+                "status": "error",
+                "error": f"Drozer agent APK not found at {DROZER_AGENT_APK_PATH}",
+            }
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    subprocess.run,
+                    ["adb", "-s", device_id, "install", "-r", DROZER_AGENT_APK_PATH],
+                    capture_output=True,
+                    text=True,
+                ),
+                timeout=120,
+            )
+
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "error": f"ADB install failed: {result.stderr}",
+                }
+
+            return {
+                "status": "installed",
+                "message": "Drozer agent installed successfully",
+                "device_id": device_id,
+            }
+        except asyncio.TimeoutError:
+            return {"status": "error", "error": "Install timed out"}
+        except FileNotFoundError:
+            return {"status": "error", "error": "ADB not found"}
+        except Exception as e:
+            logger.error(f"Failed to install drozer agent: {e}")
+            return {"status": "error", "error": "Installation failed"}
 
     async def check_drozer_installed(self) -> bool:
         """Check if Drozer is installed and available."""
@@ -223,6 +269,7 @@ class DrozerService:
         and port forwarding to be set up.
         """
         # Validate inputs
+        device_id = _validate_device_id(device_id)
         if not _validate_package_name(package_name):
             return {
                 "status": "error",
@@ -325,6 +372,7 @@ class DrozerService:
         timeout: int = 60,
     ) -> dict[str, Any]:
         """Internal method to execute a Drozer module."""
+        device_id = _validate_device_id(device_id)
         result = {
             "module": module_name,
             "args": args,
@@ -645,6 +693,7 @@ class DrozerService:
 
     async def stop_session(self, device_id: str) -> dict[str, Any]:
         """Stop a Drozer session and clean up."""
+        device_id = _validate_device_id(device_id)
         try:
             subprocess.run(
                 ["adb", "-s", device_id, "forward", "--remove", "tcp:31415"],

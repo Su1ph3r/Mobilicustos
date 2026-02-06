@@ -34,13 +34,25 @@ class FridaService:
             else:
                 device = frida.get_usb_device(timeout=5)
 
-            # Attach or spawn
+            # Attach or spawn (with timeouts to prevent hanging)
             if spawn:
-                pid = device.spawn([package_name])
-                session = device.attach(pid)
-                device.resume(pid)
+                pid = await asyncio.wait_for(
+                    asyncio.to_thread(device.spawn, [package_name]),
+                    timeout=30,
+                )
+                session = await asyncio.wait_for(
+                    asyncio.to_thread(device.attach, pid),
+                    timeout=30,
+                )
+                await asyncio.wait_for(
+                    asyncio.to_thread(device.resume, pid),
+                    timeout=30,
+                )
             else:
-                session = device.attach(package_name)
+                session = await asyncio.wait_for(
+                    asyncio.to_thread(device.attach, package_name),
+                    timeout=30,
+                )
 
             # Create and load script
             script = session.create_script(script_content)
@@ -75,6 +87,9 @@ class FridaService:
         except ImportError:
             logger.error("Frida not installed")
             raise RuntimeError("Frida is not installed")
+        except asyncio.TimeoutError:
+            logger.error(f"Timed out injecting script into {package_name}")
+            raise RuntimeError(f"Frida operation timed out for {package_name}")
         except Exception as e:
             logger.error(f"Failed to inject script: {e}")
             raise
@@ -144,13 +159,19 @@ class FridaService:
             else:
                 device = frida.get_usb_device(timeout=5)
 
-            processes = device.enumerate_processes()
+            processes = await asyncio.wait_for(
+                asyncio.to_thread(device.enumerate_processes),
+                timeout=30,
+            )
             return [
                 {"pid": p.pid, "name": p.name}
                 for p in processes
             ]
         except ImportError:
             logger.error("Frida not installed")
+            return []
+        except asyncio.TimeoutError:
+            logger.error("Timed out listing processes")
             return []
         except Exception as e:
             logger.error(f"Failed to list processes: {e}")
@@ -166,7 +187,10 @@ class FridaService:
             else:
                 device = frida.get_usb_device(timeout=5)
 
-            apps = device.enumerate_applications()
+            apps = await asyncio.wait_for(
+                asyncio.to_thread(device.enumerate_applications),
+                timeout=30,
+            )
             return [
                 {
                     "identifier": a.identifier,
@@ -177,6 +201,9 @@ class FridaService:
             ]
         except ImportError:
             logger.error("Frida not installed")
+            return []
+        except asyncio.TimeoutError:
+            logger.error("Timed out listing apps")
             return []
         except Exception as e:
             logger.error(f"Failed to list apps: {e}")

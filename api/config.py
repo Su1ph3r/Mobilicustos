@@ -64,6 +64,7 @@ class Settings(BaseSettings):
 
     # Frida
     frida_server_version: str = "16.5.9"
+    frida_server_host: str = ""  # TCP host:port for remote frida-server (e.g. host.docker.internal:27042)
 
     @property
     def database_url(self) -> str:

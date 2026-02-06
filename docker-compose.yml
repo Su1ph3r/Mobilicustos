@@ -73,6 +73,8 @@ services:
       - REDIS_URL=redis://redis:6379
       # ADB: Connect to host ADB server for USB device access
       - ADB_SERVER_SOCKET=tcp:host.docker.internal:5037
+      # Frida: TCP tunnel to frida-server on device (via adb forward on host)
+      - FRIDA_SERVER_HOST=host.docker.internal:27042
       # Host temp path for analyzer containers (must exist on host and be writable)
       - ANALYZER_TEMP_PATH=/tmp/mobilicustos_analyzer
     volumes:

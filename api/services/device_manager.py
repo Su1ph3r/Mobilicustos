@@ -236,8 +236,7 @@ class DeviceManager:
             device_id = _validate_device_id(device.device_id)
 
             if device.device_type == "corellium":
-                # Would use Corellium API
-                raise NotImplementedError("Corellium connection not implemented")
+                return await self._connect_corellium_android(device)
 
             # For physical/emulator, just verify connection
             result = await asyncio.to_thread(
@@ -269,6 +268,36 @@ class DeviceManager:
             return result.returncode == 0
         except Exception as e:
             logger.error(f"Failed to connect to iOS device: {e}")
+            return False
+
+    async def _connect_corellium_android(self, device: Device) -> bool:
+        """Connect to a Corellium Android virtual device."""
+        try:
+            from api.services.corellium_service import CorelliumClient
+
+            if not settings.corellium_api_key:
+                logger.error("Corellium API key not configured")
+                return False
+
+            if not device.corellium_instance_id:
+                logger.error(f"No corellium_instance_id on device {device.device_id}")
+                return False
+
+            client = CorelliumClient(settings.corellium_domain, settings.corellium_api_key)
+            try:
+                info = await client.get_device(device.corellium_instance_id)
+                state = info.get("state", "")
+                if state == "on":
+                    logger.info(f"Corellium device {device.corellium_instance_id} is running")
+                    return True
+                else:
+                    logger.warning(f"Corellium device state is '{state}', not 'on'")
+                    return False
+            finally:
+                await client.close()
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Corellium device: {e}")
             return False
 
     async def install_frida_server(self, device: Device) -> str:
@@ -306,12 +335,62 @@ class DeviceManager:
         }
         frida_arch = arch_map.get(arch, "arm64")
 
-        # Download and push Frida server
+        # Download, extract, and push Frida server
         frida_url = f"https://github.com/frida/frida/releases/download/{version}/frida-server-{version}-android-{frida_arch}.xz"
+        local_xz = f"/tmp/frida-server-{version}-{frida_arch}.xz"
+        local_bin = f"/tmp/frida-server-{version}-{frida_arch}"
+        remote_path = "/data/local/tmp/frida-server"
 
-        # In production, would download, extract, and push
-        logger.info(f"Would install Frida server from: {frida_url}")
+        logger.info(f"Downloading Frida server from: {frida_url}")
 
+        # Download
+        dl_result = await asyncio.to_thread(
+            subprocess.run,
+            ["curl", "-fSL", "-o", local_xz, frida_url],
+            capture_output=True,
+            timeout=120,
+        )
+        if dl_result.returncode != 0:
+            raise RuntimeError(f"Failed to download Frida server: {dl_result.stderr.decode()}")
+
+        # Extract
+        extract_result = await asyncio.to_thread(
+            subprocess.run,
+            ["xz", "-d", "-f", local_xz],
+            capture_output=True,
+            timeout=60,
+        )
+        if extract_result.returncode != 0:
+            raise RuntimeError(f"Failed to extract Frida server: {extract_result.stderr.decode()}")
+
+        # Push to device
+        push_result = await asyncio.to_thread(
+            subprocess.run,
+            ["adb", "-s", device_id, "push", local_bin, remote_path],
+            capture_output=True,
+            timeout=60,
+        )
+        if push_result.returncode != 0:
+            raise RuntimeError(f"Failed to push Frida server: {push_result.stderr.decode()}")
+
+        # Make executable
+        chmod_result = await asyncio.to_thread(
+            subprocess.run,
+            ["adb", "-s", device_id, "shell", "chmod", "755", remote_path],
+            capture_output=True,
+            timeout=10,
+        )
+        if chmod_result.returncode != 0:
+            raise RuntimeError(f"Failed to chmod Frida server: {chmod_result.stderr.decode()}")
+
+        # Clean up local file
+        import os
+        try:
+            os.remove(local_bin)
+        except OSError:
+            pass
+
+        logger.info(f"Frida server {version} installed on device {device_id}")
         return version
 
     async def _install_frida_ios(self, device: Device, version: str) -> str:
@@ -338,10 +417,13 @@ class DeviceManager:
                 timeout=5,
             )
 
-            # Start server in background
+            # Start server in background using nohup with shell for proper daemonization
             await asyncio.to_thread(
                 subprocess.Popen,
-                ["adb", "-s", device_id, "shell", "/data/local/tmp/frida-server", "&"],
+                ["adb", "-s", device_id, "shell",
+                 "nohup", "/data/local/tmp/frida-server", "-D"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
 
             # Wait briefly and verify

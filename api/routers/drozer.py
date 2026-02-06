@@ -81,6 +81,42 @@ async def check_drozer_status():
     }
 
 
+class DrozerInstallRequest(BaseModel):
+    """Request to install drozer agent on a device."""
+    device_id: str
+
+
+@router.post("/install")
+async def install_drozer_agent(
+    request: DrozerInstallRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Install drozer agent APK on a device."""
+    # Verify device exists and is connected
+    device_result = await db.execute(
+        select(Device).where(Device.device_id == request.device_id)
+    )
+    device = device_result.scalar_one_or_none()
+
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if device.status != "connected":
+        raise HTTPException(status_code=400, detail="Device not connected")
+    if device.platform != "android":
+        raise HTTPException(status_code=400, detail="Drozer only supports Android devices")
+
+    service = DrozerService()
+    result = await service.install_agent(device_id=request.device_id)
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to install drozer agent"),
+        )
+
+    return result
+
+
 @router.post("/sessions", response_model=DrozerSessionResponse)
 async def start_session(
     request: DrozerSessionCreate,

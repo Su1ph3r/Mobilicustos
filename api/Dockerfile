@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     unzip \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI for container orchestration
@@ -23,6 +24,12 @@ ENV PATH="/opt/platform-tools:${PATH}"
 # Copy and install Python dependencies
 COPY api/requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Download drozer agent APK for on-device installation
+RUN mkdir -p /app/tools && \
+    curl -fSL -o /app/tools/drozer-agent.apk \
+    "https://github.com/WithSecureLabs/drozer-agent/releases/latest/download/drozer-agent.apk" || \
+    echo "Drozer agent APK download failed (non-fatal, can be installed later)"
 
 # Copy API code
 COPY api/ /app/api/
