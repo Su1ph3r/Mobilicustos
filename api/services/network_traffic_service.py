@@ -522,7 +522,7 @@ class NetworkTrafficService:
                 "version": "1.2",
                 "creator": {
                     "name": "Mobilicustos",
-                    "version": "0.1.0"
+                    "version": "0.1.1"
                 },
                 "entries": entries
             }

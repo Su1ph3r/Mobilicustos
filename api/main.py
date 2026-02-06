@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Mobilicustos",
     description="Mobile Security Penetration Testing Platform",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
@@ -140,6 +140,6 @@ async def root():
     """Root endpoint."""
     return {
         "name": "Mobilicustos",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "description": "Mobile Security Penetration Testing Platform",
     }

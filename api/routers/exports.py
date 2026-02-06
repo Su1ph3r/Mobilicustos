@@ -185,7 +185,7 @@ def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingRe
                 "tool": {
                     "driver": {
                         "name": "Mobilicustos",
-                        "version": "0.1.0",
+                        "version": "0.1.1",
                         "informationUri": "https://github.com/mobilicustos",
                         "rules": [],
                     }

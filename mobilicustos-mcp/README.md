@@ -4,7 +4,7 @@ Model Context Protocol (MCP) server for the Mobilicustos mobile security analysi
 
 ## Features
 
-This MCP server provides LLM integration for:
+This MCP server provides AI assistant integration for:
 
 - **Application Analysis**: Upload, scan, and analyze mobile apps
 - **Finding Management**: Query and explain security findings
@@ -28,9 +28,9 @@ Set the API URL environment variable:
 export MOBILICUSTOS_API_URL=http://localhost:8000/api
 ```
 
-## Usage with Claude Desktop
+## Usage with MCP Clients
 
-Add to your Claude Desktop configuration (`~/.claude/claude_desktop_config.json`):
+Add to your MCP client configuration:
 
 ```json
 {
@@ -80,7 +80,7 @@ Add to your Claude Desktop configuration (`~/.claude/claude_desktop_config.json`
 
 ## Example Usage
 
-Once connected, you can ask Claude questions like:
+Once connected, you can ask questions like:
 
 - "Analyze the app with ID abc123 for security issues"
 - "Explain finding XYZ and how to fix it"
