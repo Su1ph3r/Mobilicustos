@@ -1,0 +1,117 @@
+rules:
+  - id: hardcoded-http-url-java
+    languages:
+      - java
+      - kotlin
+    severity: WARNING
+    message: |
+      Hardcoded HTTP URL detected. The application uses an insecure HTTP connection instead of HTTPS,
+      which transmits data in plaintext. This allows attackers to intercept and modify network traffic
+      through man-in-the-middle (MITM) attacks.
+
+      Replace all HTTP URLs with HTTPS to encrypt data in transit. For Android, ensure that the
+      Network Security Configuration does not allow cleartext traffic.
+    metadata:
+      cwe:
+        - "CWE-319"
+      owasp:
+        - "MASVS-NETWORK-1"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+        - https://developer.android.com/training/articles/security-config
+    pattern-regex: '"http://(?!localhost|127\.0\.0\.1)[^"]*"'
+
+  - id: hardcoded-http-url-swift
+    languages:
+      - swift
+    severity: WARNING
+    message: |
+      Hardcoded HTTP URL detected. The application uses an insecure HTTP connection instead of HTTPS,
+      which transmits data in plaintext. This allows attackers to intercept and modify network traffic
+      through man-in-the-middle (MITM) attacks.
+
+      Replace all HTTP URLs with HTTPS to encrypt data in transit. Configure App Transport Security
+      (ATS) to block insecure connections.
+    metadata:
+      cwe:
+        - "CWE-319"
+      owasp:
+        - "MASVS-NETWORK-1"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+        - https://developer.apple.com/documentation/security/preventing_insecure_network_connections
+    pattern-regex: '"http://(?!localhost|127\.0\.0\.1)[^"]*"'
+
+  - id: hardcoded-http-url-javascript
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    message: |
+      Hardcoded HTTP URL detected. The application uses an insecure HTTP connection instead of HTTPS,
+      which transmits data in plaintext. This allows attackers to intercept and modify network traffic
+      through man-in-the-middle (MITM) attacks.
+
+      Replace all HTTP URLs with HTTPS to encrypt data in transit.
+    metadata:
+      cwe:
+        - "CWE-319"
+      owasp:
+        - "MASVS-NETWORK-1"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+    pattern-regex: '["'']http://(?!localhost|127\.0\.0\.1)[^"'']*["'']'
+
+  - id: http-url-in-config
+    languages:
+      - json
+      - yaml
+    severity: WARNING
+    message: |
+      HTTP URL found in configuration file. Configuration files often contain API endpoints
+      and backend URLs. Using HTTP instead of HTTPS exposes these connections to MITM attacks.
+
+      Update all URLs in configuration files to use HTTPS.
+    metadata:
+      cwe:
+        - "CWE-319"
+      owasp:
+        - "MASVS-NETWORK-1"
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+    pattern-regex: 'http://(?!localhost|127\.0\.0\.1)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+  - id: websocket-insecure-connection
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    message: |
+      Insecure WebSocket connection detected (ws:// instead of wss://). WebSocket connections
+      using ws:// transmit data in plaintext, making them vulnerable to eavesdropping and MITM attacks.
+
+      Use wss:// (WebSocket Secure) to encrypt WebSocket traffic over TLS.
+    metadata:
+      cwe:
+        - "CWE-319"
+      owasp:
+        - "MASVS-NETWORK-1"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    pattern-regex: '["'']ws://(?!localhost|127\.0\.0\.1)[^"'']*["'']'

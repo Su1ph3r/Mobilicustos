@@ -383,11 +383,250 @@ setTimeout(function() {
 """
 
 
+IOS_NETWORK_HOOKS_SCRIPT = r"""
+'use strict';
+
+var findings = [];
+
+function reportFinding(category, title, severity, detail) {
+    findings.push({category: category, title: title, severity: severity, detail: detail});
+    send({type: 'finding', category: category, title: title, severity: severity, detail: detail});
+}
+
+if (ObjC.available) {
+
+    // ---- HTTP Traffic Monitoring ----
+    // 1. NSURLSession dataTaskWithRequest: — main HTTP traffic
+    try {
+        var NSURLSession = ObjC.classes.NSURLSession;
+        Interceptor.attach(NSURLSession['- dataTaskWithRequest:completionHandler:'].implementation, {
+            onEnter: function(args) {
+                var request = ObjC.Object(args[2]);
+                var url = request.URL().absoluteString().toString();
+                var method = request.HTTPMethod().toString();
+                send({type: 'endpoint', url: url, method: method});
+                if (url.indexOf('http://') === 0) {
+                    reportFinding('Network', 'Cleartext HTTP request detected (NSURLSession)',
+                        'high', 'NSURLSession dataTask to: ' + url.substring(0, 200));
+                }
+            }
+        });
+    } catch(e) {}
+
+    // 2. NSURLSession downloadTaskWithRequest:
+    try {
+        var NSURLSession = ObjC.classes.NSURLSession;
+        Interceptor.attach(NSURLSession['- downloadTaskWithRequest:'].implementation, {
+            onEnter: function(args) {
+                var request = ObjC.Object(args[2]);
+                var url = request.URL().absoluteString().toString();
+                send({type: 'endpoint', url: url, method: 'DOWNLOAD'});
+                if (url.indexOf('http://') === 0) {
+                    reportFinding('Network', 'Cleartext HTTP download detected',
+                        'high', 'NSURLSession downloadTask to: ' + url.substring(0, 200));
+                }
+            }
+        });
+    } catch(e) {}
+
+    // ---- Certificate Validation ----
+    // 3. SecTrustEvaluateWithError — modern cert validation
+    try {
+        var SecTrustEvaluateWithError = Module.findExportByName('Security', 'SecTrustEvaluateWithError');
+        if (SecTrustEvaluateWithError) {
+            Interceptor.attach(SecTrustEvaluateWithError, {
+                onEnter: function(args) {
+                    this.trust = args[0];
+                    this.errorPtr = args[1];
+                },
+                onLeave: function(retval) {
+                    var result = retval.toInt32();
+                    if (result === 0) {
+                        reportFinding('Certificate', 'Certificate validation failed (SecTrustEvaluateWithError)',
+                            'info', 'SecTrustEvaluateWithError returned false — cert chain rejected');
+                    } else {
+                        reportFinding('Certificate', 'Certificate validated (SecTrustEvaluateWithError)',
+                            'info', 'SecTrustEvaluateWithError returned true — cert chain accepted');
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 4. SecTrustEvaluate — legacy cert validation
+    try {
+        var SecTrustEvaluate = Module.findExportByName('Security', 'SecTrustEvaluate');
+        if (SecTrustEvaluate) {
+            Interceptor.attach(SecTrustEvaluate, {
+                onEnter: function(args) {
+                    this.resultPtr = args[1];
+                },
+                onLeave: function(retval) {
+                    reportFinding('Certificate', 'Legacy certificate evaluation (SecTrustEvaluate)',
+                        'info', 'SecTrustEvaluate called — consider migrating to SecTrustEvaluateWithError');
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 5. SSL Pinning — URLSession:didReceiveChallenge: delegate
+    try {
+        // Hook all classes implementing URLSession:didReceiveChallenge:
+        var resolver = new ApiResolver('objc');
+        var matches = resolver.enumerateMatches('-[* URLSession:didReceiveChallenge:completionHandler:]');
+        matches.forEach(function(match) {
+            try {
+                Interceptor.attach(match.address, {
+                    onEnter: function(args) {
+                        var challenge = ObjC.Object(args[3]);
+                        var protectionSpace = challenge.protectionSpace();
+                        var authMethod = protectionSpace.authenticationMethod().toString();
+                        var host = protectionSpace.host().toString();
+                        if (authMethod === 'NSURLAuthenticationMethodServerTrust') {
+                            reportFinding('SSL Pinning', 'TLS challenge handler detected',
+                                'info', 'URLSession:didReceiveChallenge: for host: ' + host + ' auth: ' + authMethod);
+                        }
+                    }
+                });
+            } catch(e2) {}
+        });
+    } catch(e) {}
+
+    // ---- Cookie Security ----
+    // 6. NSHTTPCookieStorage setCookie:
+    try {
+        var NSHTTPCookieStorage = ObjC.classes.NSHTTPCookieStorage;
+        Interceptor.attach(NSHTTPCookieStorage['- setCookie:'].implementation, {
+            onEnter: function(args) {
+                var cookie = ObjC.Object(args[2]);
+                var name = cookie.name().toString();
+                var domain = cookie.domain().toString();
+                var isSecure = cookie.isSecure();
+                var isHTTPOnly = cookie.isHTTPOnly();
+                reportFinding('Cookie', 'Cookie set via NSHTTPCookieStorage',
+                    'info', 'Cookie "' + name + '" for domain "' + domain + '" Secure=' + isSecure + ' HTTPOnly=' + isHTTPOnly);
+                if (!isSecure) {
+                    reportFinding('Cookie', 'Cookie set without Secure flag (iOS)',
+                        'medium', 'Cookie "' + name + '" for "' + domain + '" lacks Secure flag');
+                }
+                if (!isHTTPOnly) {
+                    reportFinding('Cookie', 'Cookie set without HttpOnly flag (iOS)',
+                        'low', 'Cookie "' + name + '" for "' + domain + '" lacks HttpOnly flag');
+                }
+            }
+        });
+    } catch(e) {}
+
+    // ---- DNS Resolution ----
+    // 7. CFHostStartInfoResolution — DNS lookups
+    try {
+        var getaddrinfo = Module.findExportByName('libsystem_info.dylib', 'getaddrinfo');
+        if (getaddrinfo) {
+            Interceptor.attach(getaddrinfo, {
+                onEnter: function(args) {
+                    if (args[0] && !args[0].isNull()) {
+                        var hostname = args[0].readUtf8String();
+                        if (hostname) {
+                            send({type: 'dns_resolution', hostname: hostname});
+                            reportFinding('DNS', 'DNS resolution detected (iOS)',
+                                'info', 'getaddrinfo("' + hostname + '") — app resolves hostname');
+                        }
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- WebSocket Monitoring ----
+    // 8. NSURLSessionWebSocketTask sendMessage:
+    try {
+        var NSURLSessionWebSocketTask = ObjC.classes.NSURLSessionWebSocketTask;
+        if (NSURLSessionWebSocketTask) {
+            Interceptor.attach(NSURLSessionWebSocketTask['- sendMessage:completionHandler:'].implementation, {
+                onEnter: function(args) {
+                    var message = ObjC.Object(args[2]);
+                    var type = message.type(); // 0 = data, 1 = string
+                    var typeName = type === 1 ? 'text' : 'binary';
+                    reportFinding('WebSocket', 'WebSocket message sent (iOS)',
+                        'info', 'NSURLSessionWebSocketTask.sendMessage type=' + typeName);
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 9. NSURLSessionWebSocketTask receiveMessageWithCompletionHandler:
+    try {
+        var NSURLSessionWebSocketTask = ObjC.classes.NSURLSessionWebSocketTask;
+        if (NSURLSessionWebSocketTask) {
+            Interceptor.attach(NSURLSessionWebSocketTask['- receiveMessageWithCompletionHandler:'].implementation, {
+                onEnter: function(args) {
+                    reportFinding('WebSocket', 'WebSocket message receive initiated (iOS)',
+                        'info', 'NSURLSessionWebSocketTask.receiveMessage called');
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- Network.framework (modern iOS networking) ----
+    // 10. nw_connection_send — low-level Network.framework
+    try {
+        var nw_connection_send = Module.findExportByName('libnetwork.dylib', 'nw_connection_send');
+        if (nw_connection_send) {
+            var nwSendCount = 0;
+            Interceptor.attach(nw_connection_send, {
+                onEnter: function(args) {
+                    nwSendCount++;
+                    if (nwSendCount <= 5 || nwSendCount === 50) {
+                        reportFinding('Network', 'Network.framework data sent',
+                            'info', 'nw_connection_send called (count: ' + nwSendCount + ')');
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- App Transport Security ----
+    // 11. Detect ATS exceptions at runtime
+    try {
+        var NSBundle = ObjC.classes.NSBundle;
+        var mainBundle = NSBundle.mainBundle();
+        var infoPlist = mainBundle.infoDictionary();
+        var ats = infoPlist.objectForKey_('NSAppTransportSecurity');
+        if (ats) {
+            var allowsArbitrary = ats.objectForKey_('NSAllowsArbitraryLoads');
+            if (allowsArbitrary && allowsArbitrary.boolValue()) {
+                reportFinding('Network', 'App Transport Security disabled (NSAllowsArbitraryLoads)',
+                    'high', 'Info.plist has NSAllowsArbitraryLoads=YES — all cleartext traffic allowed');
+            }
+            var exceptionDomains = ats.objectForKey_('NSExceptionDomains');
+            if (exceptionDomains) {
+                var keys = exceptionDomains.allKeys();
+                var domainList = [];
+                for (var i = 0; i < keys.count(); i++) {
+                    domainList.push(keys.objectAtIndex_(i).toString());
+                }
+                if (domainList.length > 0) {
+                    reportFinding('Network', 'App Transport Security exceptions configured',
+                        'medium', 'ATS exception domains: ' + domainList.join(', '));
+                }
+            }
+        }
+    } catch(e) {}
+
+    send({type: 'hooks_ready', count: 11});
+}
+
+setTimeout(function() {
+    send({type: 'collection_done', findings: findings});
+}, 25000);
+"""
+
+
 class NetworkAnalyzer(BaseAnalyzer):
     """Dynamic network and IPC analyzer using Frida + Drozer."""
 
     name = "network_analyzer"
-    platform = "android"
+    platform = "cross-platform"
 
     def __init__(self, device_id: str | None = None):
         self.device_id = device_id
@@ -400,9 +639,9 @@ class NetworkAnalyzer(BaseAnalyzer):
             logger.warning("No package_name on app - skipping network analysis")
             return findings
 
-        device_id = self.device_id or await self._find_device()
+        device_id = self.device_id or await self._find_device(app.platform)
         if not device_id:
-            logger.error("No connected Android device found for network analysis")
+            logger.error(f"No connected {app.platform} device found for network analysis")
             return findings
 
         logger.info(f"Starting network/IPC analysis of {app.package_name} on device {device_id}")
@@ -466,6 +705,12 @@ class NetworkAnalyzer(BaseAnalyzer):
                 timeout=15,
             )
 
+            # Select platform-appropriate hook script
+            if app.platform == "ios":
+                script_content = IOS_NETWORK_HOOKS_SCRIPT
+            else:
+                script_content = NETWORK_HOOKS_SCRIPT
+
             messages: list[dict] = []
             endpoints: list[dict] = []
 
@@ -478,7 +723,7 @@ class NetworkAnalyzer(BaseAnalyzer):
                         else:
                             messages.append(payload)
 
-            script = session.create_script(NETWORK_HOOKS_SCRIPT)
+            script = session.create_script(script_content)
             script.on("message", on_message)
             await asyncio.to_thread(script.load)
             await asyncio.to_thread(device.resume, pid)
@@ -942,8 +1187,22 @@ class NetworkAnalyzer(BaseAnalyzer):
             cwe_id=meta.get("cwe_id"), owasp_masvs_category=meta.get("owasp"),
         )
 
-    async def _find_device(self) -> str | None:
-        """Find the first connected Android device."""
+    async def _find_device(self, platform: str = "android") -> str | None:
+        """Find the first connected device via ADB (Android) or idevice (iOS)."""
+        if platform == "ios":
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["idevice_id", "-l"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        return line.strip()
+            except Exception as e:
+                logger.error(f"iOS device discovery failed: {e}")
+            return None
+
         try:
             result = await asyncio.to_thread(
                 subprocess.run,

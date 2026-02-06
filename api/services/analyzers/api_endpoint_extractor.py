@@ -272,6 +272,15 @@ class APIEndpointExtractor(BaseAnalyzer):
         if exposed_endpoints:
             results.append(self._create_exposed_endpoint_finding(exposed_endpoints, app))
 
+        # GraphQL endpoint detection
+        graphql_endpoints = [e for e in unique_endpoints if e.api_type == "graphql"]
+        graphql_findings = await self._detect_graphql(extracted_path, graphql_endpoints, app)
+        results.extend(graphql_findings)
+
+        # gRPC/Protobuf detection
+        grpc_findings = await self._detect_grpc(extracted_path, unique_endpoints, app)
+        results.extend(grpc_findings)
+
         return results
 
     def _is_valid_api_url(self, url: str) -> bool:
@@ -723,3 +732,151 @@ class APIEndpointExtractor(BaseAnalyzer):
             "servers": [{"url": base_url}] if base_url else [],
             "paths": paths,
         }
+
+    async def _detect_graphql(
+        self,
+        extracted_path: Path,
+        graphql_endpoints: list,
+        app,
+    ) -> list:
+        """Detect GraphQL usage and potential introspection exposure.
+
+        Searches decompiled source for GraphQL patterns: /graphql paths,
+        query/mutation syntax, __schema introspection queries.
+        """
+        findings = []
+        graphql_evidence = []
+
+        graphql_patterns = [
+            r'/graphql\b',
+            r'query\s*\{',
+            r'mutation\s*\{',
+            r'__schema\b',
+            r'__typename\b',
+            r'subscription\s*\{',
+        ]
+
+        for ext in [".java", ".kt", ".swift", ".dart", ".js", ".ts"]:
+            for src in extracted_path.rglob(f"*{ext}"):
+                if src.stat().st_size > 5 * 1024 * 1024:
+                    continue
+                try:
+                    content = src.read_text(errors="ignore")
+                    for pattern in graphql_patterns:
+                        if re.search(pattern, content, re.IGNORECASE):
+                            graphql_evidence.append(
+                                f"{pattern} found in {src.relative_to(extracted_path)}"
+                            )
+                except Exception:
+                    pass
+
+        if graphql_evidence or graphql_endpoints:
+            endpoint_urls = [e.url for e in graphql_endpoints[:5]]
+            findings.append(self.create_finding(
+                app=app,
+                title="GraphQL API endpoint detected",
+                severity="medium",
+                category="API Security",
+                description=(
+                    f"The application uses GraphQL. "
+                    f"{'Endpoints: ' + ', '.join(endpoint_urls) if endpoint_urls else ''}\n\n"
+                    f"Evidence: {'; '.join(graphql_evidence[:5])}"
+                ),
+                impact=(
+                    "GraphQL endpoints may expose introspection queries that reveal "
+                    "the entire API schema, enabling attackers to discover sensitive "
+                    "queries and mutations."
+                ),
+                remediation=(
+                    "1. Disable introspection in production: __schema queries should return errors\n"
+                    "2. Implement query depth limiting to prevent nested query attacks\n"
+                    "3. Use query whitelisting (persisted queries) in production\n"
+                    "4. Implement proper authorization on all resolvers"
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": "curl -X POST <graphql_url> -H 'Content-Type: application/json' -d '{\"query\":\"{__schema{types{name}}}\"}'" , "description": "Test GraphQL introspection"},
+                ],
+                cwe_id="CWE-200",
+                owasp_masvs_category="MASVS-NETWORK",
+            ))
+
+        return findings
+
+    async def _detect_grpc(
+        self,
+        extracted_path: Path,
+        endpoints: list,
+        app,
+    ) -> list:
+        """Detect gRPC/Protobuf usage in the application.
+
+        Searches for .proto files, gRPC class references, and protobuf
+        library imports.
+        """
+        findings = []
+        grpc_evidence = []
+
+        # Check for .proto files
+        for proto in extracted_path.rglob("*.proto"):
+            grpc_evidence.append(f"Proto file: {proto.relative_to(extracted_path)}")
+
+        # Check for gRPC class references in source
+        grpc_patterns = [
+            r'io\.grpc\.',
+            r'com\.google\.protobuf\.',
+            r'ManagedChannelBuilder',
+            r'application/grpc',
+            r'protobuf',
+        ]
+
+        for ext in [".java", ".kt", ".swift", ".dart"]:
+            for src in extracted_path.rglob(f"*{ext}"):
+                if src.stat().st_size > 5 * 1024 * 1024:
+                    continue
+                try:
+                    content = src.read_text(errors="ignore")
+                    for pattern in grpc_patterns:
+                        if re.search(pattern, content, re.IGNORECASE):
+                            grpc_evidence.append(
+                                f"{pattern} in {src.relative_to(extracted_path)}"
+                            )
+                except Exception:
+                    pass
+
+        # Check DEX files for gRPC
+        for dex in extracted_path.rglob("*.dex"):
+            try:
+                content = dex.read_bytes().decode("utf-8", errors="ignore")
+                if "io.grpc" in content or "com.google.protobuf" in content:
+                    grpc_evidence.append(f"gRPC classes in {dex.relative_to(extracted_path)}")
+            except Exception:
+                pass
+
+        if grpc_evidence:
+            findings.append(self.create_finding(
+                app=app,
+                title="gRPC/Protobuf API detected",
+                severity="info",
+                category="API Security",
+                description=(
+                    f"The application uses gRPC/Protocol Buffers for API communication.\n\n"
+                    f"Evidence: {'; '.join(grpc_evidence[:5])}"
+                ),
+                impact=(
+                    "gRPC uses binary serialization (protobuf) and HTTP/2, making traffic "
+                    "harder to intercept with standard HTTP proxies. Pentesters need "
+                    "specialized tools for gRPC interception."
+                ),
+                remediation=(
+                    "For pentesters: Use grpcurl, grpc-web-devtools, or mitmproxy with "
+                    "gRPC support to intercept traffic. Consider using grpc-web proxy "
+                    "for browser-based testing."
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": "grpcurl -plaintext <host>:<port> list", "description": "List gRPC services (if reflection enabled)"},
+                    {"type": "bash", "command": "grpcurl -plaintext <host>:<port> describe <service>", "description": "Describe gRPC service methods"},
+                ],
+                owasp_masvs_category="MASVS-NETWORK",
+            ))
+
+        return findings

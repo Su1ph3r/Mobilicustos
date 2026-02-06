@@ -20,3 +20,4 @@ croniter>=2.0.0
 drozer>=3.0.0
 objection>=1.11.0
 fpdf2>=2.8.0
+semgrep>=1.50.0

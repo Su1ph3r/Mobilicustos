@@ -221,6 +221,7 @@ a database session via FastAPI dependency injection (`get_db()`). Key services:
 | `ObjectionService`           | `objection_service.py`            | Objection session management                    |
 | `WebhookService`             | `webhook_service.py`              | Outbound webhook delivery                       |
 | `ScheduledScanService`       | `scheduled_scan_service.py`       | Cron-based scan scheduling                      |
+| `GadgetInjectionService`     | `gadget_injection_service.py`     | APK/IPA repackaging with frida-gadget           |
 
 ### 3.4 Database Models (PostgreSQL)
 
@@ -364,6 +365,7 @@ Defined in `STATIC_ANALYZERS["android"]` in `scan_orchestrator.py`:
 | 23 | `component_security_analyzer`     | `ComponentSecurityAnalyzer`  | Exported component security             |
 | 24 | `logging_analyzer`                | `LoggingAnalyzer`            | Sensitive data in logs                  |
 | 25 | `permissions_analyzer`            | `PermissionsAnalyzer`        | Permission usage analysis               |
+| 26 | `semgrep_analyzer`                | `SemgrepAnalyzer`            | Semgrep SAST code scanning              |
 
 ### 4.3 Static Analyzers (iOS)
 
@@ -384,6 +386,7 @@ Defined in `STATIC_ANALYZERS["ios"]`:
 | `crypto_auditor`          | `CryptoAuditor`         | Crypto review                        |
 | `dependency_analyzer`     | `DependencyAnalyzer`    | Library CVEs                         |
 | `privacy_analyzer`        | `PrivacyAnalyzer`       | Privacy analysis                     |
+| `semgrep_analyzer`        | `SemgrepAnalyzer`       | Semgrep SAST code scanning           |
 
 ### 4.4 Cross-Platform Analyzers
 
@@ -470,6 +473,8 @@ in mobile apps. It operates in three phases:
 | `emulator`       | Android     | Emulator detection (Build props, sensor checks)          |
 | `debugger`       | Both        | Debugger detection (ptrace, TracerPid, timing)           |
 | `biometric`      | Both        | Biometric authentication bypass                          |
+| `tamper`         | Both        | Tampering / integrity detection (signature verification) |
+| `play_integrity` | Android     | Play Integrity / SafetyNet attestation (informational)   |
 
 ### 5.3 Static Detection
 
@@ -543,7 +548,7 @@ Each bypass attempt is persisted as a `BypassResult` row:
 | `detection_method`   | Comma-joined methods from detection evidence        |
 | `detection_library`  | Subcategory of successful script                    |
 | `bypass_script_id`   | FK to `frida_scripts` (the script that succeeded)   |
-| `bypass_status`      | "success" / "failed" / "not_attempted"              |
+| `bypass_status`      | "success" / "partial" / "failed" / "informational" / "not_attempted" |
 | `poc_evidence`       | Captured Frida output (capped at 4000 chars)        |
 
 ---
@@ -829,6 +834,8 @@ Supported export formats:
 - **JSON** -- structured finding data
 - **CSV** -- tabular format
 - **SARIF** -- Static Analysis Results Interchange Format
+- **Burp XML** -- Burp Suite sitemap XML for importing discovered endpoints
+- **HAR** -- HTTP Archive format for browser/proxy tooling
 
 ---
 
@@ -929,7 +936,8 @@ mobilicustos/
       objection_service.py      # Objection session management
       webhook_service.py        # Outbound webhook delivery
       ...
-      analyzers/                # 33 security analyzer modules
+      gadget_injection_service.py  # APK/IPA repackaging with frida-gadget
+      analyzers/                # 34 security analyzer modules
         base_analyzer.py        # Abstract base class
         manifest_analyzer.py    # AndroidManifest.xml
         dex_analyzer.py         # DEX bytecode
@@ -937,7 +945,12 @@ mobilicustos/
         flutter_analyzer.py     # Flutter-specific
         runtime_analyzer.py     # Dynamic runtime analysis
         network_analyzer.py     # Network traffic analysis
+        semgrep_analyzer.py     # Semgrep SAST integration
         ...
+    semgrep-rules/              # Custom Semgrep YAML rules
+      android/                  # Android-specific rules
+      ios/                      # iOS-specific rules
+      common/                   # Cross-platform rules
     data/
       frida_scripts/            # Built-in Frida scripts (seeded on startup)
       known_findings/           # Finding template registry

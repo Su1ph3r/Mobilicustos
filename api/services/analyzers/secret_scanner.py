@@ -29,6 +29,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from api.models.database import Finding, MobileApp, Secret
 from api.services.analyzers.base_analyzer import BaseAnalyzer
 
@@ -268,6 +270,10 @@ class SecretScanner(BaseAnalyzer):
             for secret in secrets:
                 finding = self._create_secret_finding(app, secret)
                 findings.append(finding)
+
+            # Live validation of extracted secrets (safe, read-only probes)
+            live_findings = await self._live_validate_secrets(app, secrets)
+            findings.extend(live_findings)
 
         except Exception as e:
             logger.error(f"Secret scanning failed: {e}")
@@ -665,3 +671,138 @@ SecItemAdd(query as CFDictionary, nil)''',
             },
             remediation_resources=remediation_resources,
         )
+
+    async def _live_validate_secrets(
+        self, app: MobileApp, secrets: list[dict[str, Any]],
+    ) -> list[Finding]:
+        """Perform safe, read-only live validation of extracted secrets.
+
+        Tests discovered cloud identifiers against public APIs to determine
+        if they grant unauthenticated access. Only performs GET requests —
+        never writes or modifies data.
+
+        Current checks:
+            - S3 bucket public listing (extracted from URL patterns)
+            - Google API key scope validation (Maps API probe)
+
+        Args:
+            app: MobileApp ORM model for the scanned application.
+            secrets: List of secret dicts from ``_scan_content()``.
+
+        Returns:
+            List of Finding objects for confirmed misconfigurations.
+        """
+        findings: list[Finding] = []
+
+        # Collect testable identifiers from secrets
+        s3_buckets: set[str] = set()
+        google_api_keys: set[str] = set()
+
+        for secret in secrets:
+            context = secret.get("context", "")
+
+            # Extract S3 bucket names from context
+            for bucket_match in re.finditer(
+                r'(?:https?://)?([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\.s3[.\-](?:amazonaws\.com|[a-z0-9-]+\.amazonaws\.com)',
+                context,
+            ):
+                s3_buckets.add(bucket_match.group(1))
+
+            # Also match path-style S3 URLs
+            for bucket_match in re.finditer(
+                r's3\.amazonaws\.com/([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])',
+                context,
+            ):
+                s3_buckets.add(bucket_match.group(1))
+
+            # Extract Google API keys from context (AIza pattern)
+            if secret.get("provider") == "google" and secret.get("name") == "Google API Key":
+                for key_match in re.finditer(r'AIza[0-9A-Za-z_-]{35}', context):
+                    google_api_keys.add(key_match.group(0))
+
+        if not s3_buckets and not google_api_keys:
+            return findings
+
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            # 1. S3 bucket public listing test
+            for bucket in s3_buckets:
+                try:
+                    url = f"https://{bucket}.s3.amazonaws.com/"
+                    resp = await client.get(url)
+                    if resp.status_code == 200 and "ListBucketResult" in resp.text:
+                        findings.append(self.create_finding(
+                            app=app,
+                            title=f"S3 bucket publicly listable: {bucket}",
+                            severity="critical",
+                            category="Cloud Misconfiguration",
+                            description=(
+                                f"S3 bucket '{bucket}' allows unauthenticated listing. "
+                                f"Response returned ListBucketResult with {resp.text.count('<Key>')} keys."
+                            ),
+                            impact=(
+                                "Anyone can list and potentially download all objects in this S3 bucket. "
+                                "This may expose sensitive data, backups, or application assets."
+                            ),
+                            remediation=(
+                                "1. Enable S3 Block Public Access on the bucket\n"
+                                "2. Review and restrict bucket policy and ACLs\n"
+                                "3. Audit what data was publicly exposed\n"
+                                "4. Enable S3 access logging"
+                            ),
+                            poc_evidence=f"curl '{url}' returned ListBucketResult",
+                            poc_commands=[
+                                {"type": "bash", "command": f"curl '{url}'", "description": "List S3 bucket contents"},
+                                {"type": "bash", "command": f"aws s3 ls s3://{bucket}/ --no-sign-request", "description": "List with AWS CLI"},
+                            ],
+                            cwe_id="CWE-284",
+                            cwe_name="Improper Access Control",
+                            owasp_masvs_category="MASVS-STORAGE",
+                            remediation_resources=[
+                                {"title": "AWS S3 Block Public Access", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html", "type": "documentation"},
+                            ],
+                        ))
+                except Exception as e:
+                    logger.debug(f"S3 bucket check failed for {bucket}: {e}")
+
+            # 2. Google API key scope test
+            for api_key in google_api_keys:
+                try:
+                    url = f"https://maps.googleapis.com/maps/api/staticmap?center=0,0&zoom=1&size=1x1&key={api_key}"
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        redacted_key = api_key[:8] + "*" * (len(api_key) - 12) + api_key[-4:]
+                        findings.append(self.create_finding(
+                            app=app,
+                            title=f"Google API key unrestricted: {redacted_key}",
+                            severity="high",
+                            category="Cloud Misconfiguration",
+                            description=(
+                                f"Google API key ({redacted_key}) works without referrer or IP restrictions. "
+                                f"The key was tested against the Maps Static API and returned a valid response."
+                            ),
+                            impact=(
+                                "An unrestricted Google API key can be used by anyone to make API calls "
+                                "billed to the key owner. Attackers could abuse Maps, Places, Geocoding, "
+                                "or other enabled APIs to generate significant charges."
+                            ),
+                            remediation=(
+                                "1. Restrict the API key by application (Android/iOS package) or HTTP referrer\n"
+                                "2. Limit the key to only the APIs your app needs\n"
+                                "3. Set a quota/budget alert on the Google Cloud project\n"
+                                "4. Consider rotating the key"
+                            ),
+                            poc_evidence=f"GET Maps Static API with key returned HTTP 200",
+                            poc_commands=[
+                                {"type": "bash", "command": f"curl -o /dev/null -w '%{{http_code}}' 'https://maps.googleapis.com/maps/api/staticmap?center=0,0&zoom=1&size=1x1&key={redacted_key}'", "description": "Test Google Maps API key (use actual key)"},
+                            ],
+                            cwe_id="CWE-284",
+                            cwe_name="Improper Access Control",
+                            owasp_masvs_category="MASVS-STORAGE",
+                            remediation_resources=[
+                                {"title": "Google API Key Restrictions", "url": "https://cloud.google.com/docs/authentication/api-keys#securing_an_api_key", "type": "documentation"},
+                            ],
+                        ))
+                except Exception as e:
+                    logger.debug(f"Google API key check failed: {e}")
+
+        return findings

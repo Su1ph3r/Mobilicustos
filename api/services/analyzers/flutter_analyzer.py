@@ -98,6 +98,21 @@ class FlutterAnalyzer(BaseAnalyzer):
             # Also check for common Flutter security issues
             findings.extend(await self._check_flutter_config(app))
 
+            # Dart-specific SAST patterns + pub.dev deps share a single extraction
+            import shutil
+            import tempfile
+
+            shared_extract = Path(tempfile.mkdtemp(prefix="flutter_shared_"))
+            try:
+                with zipfile.ZipFile(app.file_path, "r") as archive:
+                    archive.extractall(shared_extract)
+
+                findings.extend(await self._check_dart_patterns(app, shared_extract))
+                findings.extend(await self._scan_pubdev_deps(app, shared_extract))
+            finally:
+                if shared_extract.exists():
+                    shutil.rmtree(shared_extract, ignore_errors=True)
+
         except Exception as e:
             logger.error(f"Flutter analysis failed: {e}")
 
@@ -421,5 +436,198 @@ class FlutterAnalyzer(BaseAnalyzer):
 
         except Exception as e:
             logger.error(f"Flutter config check failed: {e}")
+
+        return findings
+
+    async def _check_dart_patterns(self, app: MobileApp, extracted_path: Path) -> list[Finding]:
+        """Check for Dart-specific security anti-patterns in decompiled output.
+
+        Scans extracted text/source for insecure Dart patterns:
+            - SharedPreferences without encryption
+            - http.Client without TLS
+            - dart:developer imports in release
+            - Debug mode indicators
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Pre-extracted archive directory.
+        """
+        findings: list[Finding] = []
+        import re
+
+        try:
+            # Scan all text-like files for Dart patterns
+            dart_patterns = [
+                {
+                    "pattern": r"SharedPreferences\b",
+                    "negative": r"flutter_secure_storage|encrypted_shared_preferences",
+                    "title": "SharedPreferences used without encryption",
+                    "severity": "medium",
+                    "desc": "App uses SharedPreferences (plaintext on disk) without flutter_secure_storage.",
+                    "owasp": "MASVS-STORAGE",
+                    "cwe": "CWE-922",
+                },
+                {
+                    "pattern": r"http\.Client\(\)|HttpClient\(\)",
+                    "negative": r"https://",
+                    "title": "HTTP client without enforced TLS",
+                    "severity": "medium",
+                    "desc": "App creates HTTP client instances. Verify all connections use HTTPS.",
+                    "owasp": "MASVS-NETWORK",
+                    "cwe": "CWE-319",
+                },
+                {
+                    "pattern": r"dart:developer",
+                    "negative": None,
+                    "title": "dart:developer import detected",
+                    "severity": "low",
+                    "desc": "The dart:developer library is imported, which provides debugging tools. Should be removed in release builds.",
+                    "owasp": "MASVS-CODE",
+                    "cwe": "CWE-489",
+                },
+                {
+                    "pattern": r"kDebugMode\s*==?\s*true|kDebugMode\)",
+                    "negative": None,
+                    "title": "Debug mode check detected",
+                    "severity": "info",
+                    "desc": "App checks kDebugMode — verify debug-only code paths are not reachable in release.",
+                    "owasp": "MASVS-CODE",
+                    "cwe": None,
+                },
+                {
+                    "pattern": r"print\(|debugPrint\(",
+                    "negative": None,
+                    "title": "Debug print statements detected",
+                    "severity": "low",
+                    "desc": "Debug print statements may leak sensitive data to the device console in release builds.",
+                    "owasp": "MASVS-STORAGE",
+                    "cwe": "CWE-532",
+                },
+            ]
+
+            scannable_ext = {".dart", ".js", ".json", ".yaml", ".txt"}
+            seen_titles: set[str] = set()
+
+            for fpath in extracted_path.rglob("*"):
+                if fpath.suffix.lower() not in scannable_ext:
+                    continue
+                if fpath.stat().st_size > 5 * 1024 * 1024:
+                    continue
+
+                try:
+                    content = fpath.read_text(errors="ignore")
+                except Exception:
+                    continue
+
+                for pat in dart_patterns:
+                    if pat["title"] in seen_titles:
+                        continue
+                    if re.search(pat["pattern"], content):
+                        # Check negative pattern (if present, skip — it means the secure alternative is used)
+                        if pat["negative"] and re.search(pat["negative"], content):
+                            continue
+                        seen_titles.add(pat["title"])
+                        findings.append(self.create_finding(
+                            app=app,
+                            title=pat["title"],
+                            severity=pat["severity"],
+                            category="Dart Security",
+                            description=pat["desc"],
+                            impact="Insecure Dart patterns can lead to data leakage or runtime security issues.",
+                            remediation="Use flutter_secure_storage instead of SharedPreferences for sensitive data. Enforce HTTPS. Remove debug imports.",
+                            file_path=str(fpath.relative_to(extracted_path)),
+                            owasp_masvs_category=pat["owasp"],
+                            cwe_id=pat.get("cwe"),
+                        ))
+
+        except Exception as e:
+            logger.error(f"Dart pattern check failed: {e}")
+
+        return findings
+
+    async def _scan_pubdev_deps(self, app: MobileApp, extracted_path: Path) -> list[Finding]:
+        """Scan pub.dev dependencies from pubspec.lock for known vulnerabilities.
+
+        Checks each dependency against the OSV advisory database for known CVEs.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Pre-extracted archive directory.
+        """
+        findings: list[Finding] = []
+
+        try:
+            # Find pubspec.lock
+            pubspec_lock = None
+            for candidate in extracted_path.rglob("pubspec.lock"):
+                pubspec_lock = candidate
+                break
+
+            if not pubspec_lock:
+                return findings
+
+            content = pubspec_lock.read_text(errors="ignore")
+
+            # Parse packages from pubspec.lock
+            packages: list[tuple[str, str]] = []
+            current_pkg = None
+            for line in content.split("\n"):
+                if line.startswith("  ") and ":" in line and not line.startswith("    "):
+                    current_pkg = line.strip().rstrip(":")
+                elif "version:" in line and current_pkg:
+                    version = line.split("version:")[1].strip().strip("'\"")
+                    packages.append((current_pkg, version))
+                    current_pkg = None
+
+            if not packages:
+                return findings
+
+            logger.info(f"Checking {len(packages)} pub.dev dependencies for vulnerabilities")
+
+            # Check each package against OSV
+            import httpx
+
+            vulnerable_pkgs: list[tuple[str, str, list[dict]]] = []
+            async with httpx.AsyncClient(timeout=10) as client:
+                for pkg_name, pkg_version in packages[:50]:  # Limit to avoid rate limits
+                    try:
+                        resp = await client.post(
+                            "https://api.osv.dev/v1/query",
+                            json={
+                                "package": {"name": pkg_name, "ecosystem": "Pub"},
+                                "version": pkg_version,
+                            },
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            vulns = data.get("vulns", [])
+                            if vulns:
+                                vulnerable_pkgs.append((pkg_name, pkg_version, vulns))
+                    except Exception:
+                        pass
+
+            for pkg_name, pkg_version, vulns in vulnerable_pkgs:
+                vuln_ids = [v.get("id", "?") for v in vulns[:5]]
+                summaries = [v.get("summary", "") for v in vulns[:3]]
+                findings.append(self.create_finding(
+                    app=app,
+                    title=f"Vulnerable pub.dev dependency: {pkg_name} {pkg_version}",
+                    severity="high" if len(vulns) > 1 else "medium",
+                    category="Vulnerable Dependencies",
+                    description=(
+                        f"The Flutter dependency '{pkg_name}' version {pkg_version} has "
+                        f"{len(vulns)} known vulnerabilities:\n"
+                        + "\n".join(f"- {vid}: {summ}" for vid, summ in zip(vuln_ids, summaries))
+                    ),
+                    impact=f"Using vulnerable dependencies exposes the app to known exploits ({len(vulns)} CVEs).",
+                    remediation=f"Update {pkg_name} to the latest version. Run: flutter pub upgrade {pkg_name}",
+                    file_path="pubspec.lock",
+                    poc_evidence=f"Advisory IDs: {', '.join(vuln_ids)}",
+                    cwe_id="CWE-1395",
+                    owasp_masvs_category="MASVS-CODE",
+                ))
+
+        except Exception as e:
+            logger.error(f"Pub.dev dependency scan failed: {e}")
 
         return findings

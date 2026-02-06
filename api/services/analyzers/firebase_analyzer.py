@@ -21,6 +21,8 @@ import re
 import zipfile
 from typing import Any
 
+import httpx
+
 from api.models.database import Finding, MobileApp
 from api.services.analyzers.base_analyzer import BaseAnalyzer
 
@@ -58,7 +60,7 @@ class FirebaseAnalyzer(BaseAnalyzer):
     }
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze Firebase configuration."""
+        """Analyze Firebase configuration and perform live validation."""
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -69,6 +71,9 @@ class FirebaseAnalyzer(BaseAnalyzer):
                 findings.extend(await self._analyze_android(app))
             elif app.platform == "ios":
                 findings.extend(await self._analyze_ios(app))
+
+            # Live validation of extracted Firebase project IDs
+            findings.extend(await self._live_validate_firebase(app, findings))
         except Exception as e:
             logger.error(f"Firebase analysis failed: {e}")
 
@@ -190,5 +195,95 @@ class FirebaseAnalyzer(BaseAnalyzer):
                     cwe_name="Use of Hard-coded Credentials",
                     owasp_masvs_category="MASVS-STORAGE",
                 ))
+
+        return findings
+
+    async def _live_validate_firebase(
+        self, app: MobileApp, existing_findings: list[Finding],
+    ) -> list[Finding]:
+        """Perform safe, read-only live validation of Firebase resources.
+
+        Probes Firebase RTDB and Firestore for unauthenticated access.
+        Only performs GET requests — never writes or modifies data.
+        """
+        findings: list[Finding] = []
+
+        # Extract project IDs from existing findings
+        project_ids: set[str] = set()
+        for f in existing_findings:
+            if f.description:
+                # Match "Project: xxx" or "Project ID: xxx"
+                match = re.search(r'Project(?:\s*ID)?:\s*([a-z0-9-]+)', f.description)
+                if match:
+                    project_ids.add(match.group(1))
+
+        if not project_ids:
+            return findings
+
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            for project_id in project_ids:
+                # 1. Firebase Realtime Database open access test
+                try:
+                    rtdb_url = f"https://{project_id}-default-rtdb.firebaseio.com/.json"
+                    resp = await client.get(rtdb_url)
+                    if resp.status_code == 200 and resp.text != "null":
+                        findings.append(self.create_finding(
+                            app=app,
+                            title=f"Firebase RTDB publicly accessible: {project_id}",
+                            severity="critical",
+                            category="Cloud Misconfiguration",
+                            description=(
+                                f"Firebase Realtime Database for project '{project_id}' allows "
+                                f"unauthenticated read access. Response status: {resp.status_code}, "
+                                f"data length: {len(resp.text)} bytes."
+                            ),
+                            impact="Anyone can read data from this Firebase database without authentication. This may expose user data, app configuration, or other sensitive information.",
+                            remediation=(
+                                "1. Update Firebase Security Rules to require authentication:\n"
+                                '   { "rules": { ".read": "auth != null", ".write": "auth != null" } }\n'
+                                "2. Review and restrict data access per user/role\n"
+                                "3. Audit what data was publicly exposed"
+                            ),
+                            poc_evidence=f"curl '{rtdb_url}' returned {len(resp.text)} bytes",
+                            poc_commands=[
+                                {"type": "bash", "command": f"curl '{rtdb_url}'", "description": "Test unauthenticated RTDB access"},
+                            ],
+                            cwe_id="CWE-284",
+                            owasp_masvs_category="MASVS-STORAGE",
+                        ))
+                except Exception as e:
+                    logger.debug(f"Firebase RTDB check failed for {project_id}: {e}")
+
+                # 2. Firestore open access test
+                try:
+                    firestore_url = (
+                        f"https://firestore.googleapis.com/v1/projects/{project_id}"
+                        f"/databases/(default)/documents"
+                    )
+                    resp = await client.get(firestore_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("documents"):
+                            findings.append(self.create_finding(
+                                app=app,
+                                title=f"Firestore publicly accessible: {project_id}",
+                                severity="critical",
+                                category="Cloud Misconfiguration",
+                                description=(
+                                    f"Cloud Firestore for project '{project_id}' allows "
+                                    f"unauthenticated document listing. "
+                                    f"{len(data.get('documents', []))} documents returned."
+                                ),
+                                impact="Anyone can list and read Firestore documents without authentication.",
+                                remediation="Configure Firestore Security Rules to require authentication for all reads.",
+                                poc_evidence=f"GET {firestore_url} returned documents",
+                                poc_commands=[
+                                    {"type": "bash", "command": f"curl '{firestore_url}'", "description": "Test unauthenticated Firestore access"},
+                                ],
+                                cwe_id="CWE-284",
+                                owasp_masvs_category="MASVS-STORAGE",
+                            ))
+                except Exception as e:
+                    logger.debug(f"Firestore check failed for {project_id}: {e}")
 
         return findings

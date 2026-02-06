@@ -5,6 +5,69 @@ All notable changes to Mobilicustos will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-06
+
+### Added
+
+#### New Analyzers & SAST
+- **Semgrep Analyzer** — Semgrep SAST integration with custom YAML rule sets
+  - 16 bundled rules across Android (WebView, crypto), iOS (NSUserDefaults), and common (HTTP) categories
+  - MASVS category mapping from rule metadata
+  - Zip Slip protection on archive extraction
+- **Firebase Live Validation** — Probes Firebase RTDB and Firestore for misconfigured security rules
+  - Read-only GET requests to detect open databases
+  - Integrated into existing firebase_analyzer pipeline
+
+#### Enhanced Analyzers
+- **Runtime Analyzer** — iOS runtime hooks achieving feature parity with Android
+  - 16+ iOS-specific API hooks via ObjC.classes and Interceptor.attach
+  - NSFileManager, UIApplication, SecItemAdd, NSUserDefaults, CCCrypt, LAContext, UIPasteboard
+- **Network Analyzer** — iOS network traffic hooks for SSL pinning and URL loading
+- **Flutter Analyzer** — Dart SAST patterns and pub.dev vulnerability scanning
+  - SharedPreferences without encryption, HTTP client without TLS, dart:developer imports
+  - OSV advisory database integration for pub.dev dependencies
+  - Shared archive extraction for performance (single extract shared across sub-analyzers)
+- **API Endpoint Extractor** — GraphQL introspection and gRPC/Protobuf detection
+- **Dependency Analyzer** — SwiftPM (Package.resolved), yarn.lock, SDK fingerprinting
+- **Secret Scanner** — Live validation of S3 buckets and Google API keys
+  - S3 bucket listing probe (checks for ListBucketResult)
+  - Google Maps Static API key scope validation
+
+#### Bypass Framework
+- **Tamper Detection** — Signature verification and integrity check bypass
+- **Play Integrity** — Play Integrity / SafetyNet detection with informational status
+  - Server-side attestation correctly flagged as non-bypassable client-side
+
+#### New API Endpoints
+- `GET /api/scans/registry/analyzers` — Analyzer registry with metadata for all 34 analyzers
+- `GET /api/scans/{scan_id}/mastg-coverage` — OWASP MASTG test coverage mapping
+- `GET /api/scans/{scan_id}/export/burp` — Burp Suite XML sitemap export
+- `GET /api/scans/{scan_id}/export/har` — HAR format export for discovered endpoints
+
+#### Services
+- **Gadget Injection Service** — APK/IPA repackaging with frida-gadget
+  - Android: apktool decompile, gadget injection, apksigner
+  - iOS: insert_dylib + codesign workflow
+
+#### Infrastructure
+- **Dockerfile** — Added JDK, apktool 2.9.3, Android SDK build-tools 34.0.0, Docker CLI, ADB platform-tools, drozer agent APK
+- **requirements.txt** — Added semgrep>=1.50.0
+- **Semgrep Rules** — 4 custom YAML rule files (16 rules total)
+
+### Fixed
+- Bypass auto-bypass summary now counts `informational` status (was missing, causing incorrect totals)
+- Zip Slip protection added to semgrep_analyzer archive extraction
+- Semgrep rule paths resolved as absolute paths (fixes Docker CWD mismatch)
+- Content-Disposition headers properly quoted per RFC 6266
+- Semgrep exit code handling corrected (only accept 0; code 1 indicates errors)
+- Burp XML export uses `urllib.parse.urlparse` instead of fragile string splitting
+- Dockerfile apktool URL corrected to official iBotPeaches source
+- Dockerfile Android SDK build-tools installation uses sdkmanager instead of direct download
+- Dockerfile removed `|| true` that silently swallowed sdkmanager errors
+- Flutter analyzer shared extraction eliminates redundant double-extraction
+
+---
+
 ## [0.1.1] - 2026-02-06
 
 ### Added

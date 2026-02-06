@@ -81,6 +81,7 @@ class DependencyAnalyzer(BaseAnalyzer):
         "cocoapods": "CocoaPods",
         "npm": "npm",
         "pub": "Pub",
+        "swiftpm": "SwiftPM",
     }
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
@@ -107,15 +108,19 @@ class DependencyAnalyzer(BaseAnalyzer):
             if app.platform == "android":
                 dependencies.extend(await self._parse_gradle_files(extracted_path))
                 dependencies.extend(await self._parse_package_json(extracted_path))
+                dependencies.extend(await self._parse_yarn_lock(extracted_path))
             elif app.platform == "ios":
                 dependencies.extend(await self._parse_podfile(extracted_path))
+                dependencies.extend(await self._parse_swift_package_resolved(extracted_path))
                 dependencies.extend(await self._parse_package_json(extracted_path))
+                dependencies.extend(await self._parse_yarn_lock(extracted_path))
 
             # Check for Flutter/React Native
             if app.framework == "flutter":
                 dependencies.extend(await self._parse_pubspec(extracted_path))
             elif app.framework == "react_native":
                 dependencies.extend(await self._parse_package_json(extracted_path))
+                dependencies.extend(await self._parse_yarn_lock(extracted_path))
 
             logger.info(f"Found {len(dependencies)} dependencies to analyze")
 
@@ -149,6 +154,15 @@ class DependencyAnalyzer(BaseAnalyzer):
             except Exception as e:
                 logger.warning(f"Library fingerprinting failed: {e}")
 
+            # Run SDK fingerprinting for Android apps
+            if app.platform == "android":
+                try:
+                    sdk_deps = await self._fingerprint_sdks(extracted_path)
+                    dependencies.extend(sdk_deps)
+                    logger.info(f"Fingerprinted {len(sdk_deps)} SDKs via class patterns")
+                except Exception as e:
+                    logger.warning(f"SDK fingerprinting failed: {e}")
+
             # Add summary finding if vulnerabilities found
             if vulnerable_deps:
                 results.append(self._create_summary_finding(vulnerable_deps, app))
@@ -176,7 +190,7 @@ class DependencyAnalyzer(BaseAnalyzer):
         return findings
 
     async def _parse_gradle_files(self, extracted_path: Path) -> list[Dependency]:
-        """Parse build.gradle and build.gradle.kts files."""
+        """Parse build.gradle, build.gradle.kts, and gradle.lockfile files."""
         dependencies = []
 
         gradle_patterns = [
@@ -201,6 +215,25 @@ class DependencyAnalyzer(BaseAnalyzer):
                         ))
             except Exception as e:
                 logger.warning(f"Error parsing {gradle_file}: {e}")
+
+        # Parse gradle.lockfile for transitive dependencies
+        for lockfile in extracted_path.rglob("gradle.lockfile"):
+            try:
+                content = lockfile.read_text(errors='ignore')
+                # Format: group:artifact:version=...
+                lockfile_pattern = r'^([^:]+):([^:]+):([^=]+)='
+                for line in content.split('\n'):
+                    match = re.match(lockfile_pattern, line.strip())
+                    if match:
+                        group_id, artifact_id, version = match.groups()
+                        dependencies.append(Dependency(
+                            package_manager="gradle",
+                            name=f"{group_id}:{artifact_id}",
+                            version=version.strip(),
+                            source_file=str(lockfile.relative_to(extracted_path))
+                        ))
+            except Exception as e:
+                logger.warning(f"Error parsing {lockfile}: {e}")
 
         return dependencies
 
@@ -303,6 +336,155 @@ class DependencyAnalyzer(BaseAnalyzer):
                         ))
             except Exception as e:
                 logger.warning(f"Error parsing pubspec.lock: {e}")
+
+        return dependencies
+
+    async def _parse_swift_package_resolved(self, extracted_path: Path) -> list[Dependency]:
+        """Parse Package.resolved (SwiftPM) for iOS apps.
+
+        Supports both v1 and v2 format:
+        - v1: object.pins[].package, object.pins[].state.version
+        - v2: pins[].identity, pins[].state.version
+        """
+        dependencies = []
+
+        for resolved_file in extracted_path.rglob("Package.resolved"):
+            try:
+                content = json.loads(resolved_file.read_text(errors='ignore'))
+
+                # Detect version format
+                if "object" in content and "pins" in content.get("object", {}):
+                    # v1 format
+                    pins = content["object"]["pins"]
+                    for pin in pins:
+                        name = pin.get("package")
+                        version = pin.get("state", {}).get("version")
+                        if name:
+                            dependencies.append(Dependency(
+                                package_manager="swiftpm",
+                                name=name,
+                                version=version,
+                                source_file=str(resolved_file.relative_to(extracted_path))
+                            ))
+                elif "pins" in content:
+                    # v2 format
+                    pins = content["pins"]
+                    for pin in pins:
+                        name = pin.get("identity")
+                        version = pin.get("state", {}).get("version")
+                        if name:
+                            dependencies.append(Dependency(
+                                package_manager="swiftpm",
+                                name=name,
+                                version=version,
+                                source_file=str(resolved_file.relative_to(extracted_path))
+                            ))
+            except Exception as e:
+                logger.warning(f"Error parsing {resolved_file}: {e}")
+
+        return dependencies
+
+    async def _parse_yarn_lock(self, extracted_path: Path) -> list[Dependency]:
+        """Parse yarn.lock for JavaScript dependencies.
+
+        Format: "package@version":
+                  version "x.y.z"
+        """
+        dependencies = []
+
+        for yarn_lock in extracted_path.rglob("yarn.lock"):
+            # Skip node_modules
+            if "node_modules" in str(yarn_lock):
+                continue
+
+            try:
+                content = yarn_lock.read_text(errors='ignore')
+                lines = content.split('\n')
+
+                current_package = None
+                for i, line in enumerate(lines):
+                    # Match package declaration like: "package@version":
+                    pkg_match = re.match(r'^"?([^@"]+)@[^"]*"?:\s*$', line.strip())
+                    if pkg_match:
+                        current_package = pkg_match.group(1)
+                    # Match version line like:   version "1.2.3"
+                    elif current_package and line.strip().startswith('version '):
+                        version_match = re.search(r'version\s+"([^"]+)"', line)
+                        if version_match:
+                            version = version_match.group(1)
+                            dependencies.append(Dependency(
+                                package_manager="npm",
+                                name=current_package,
+                                version=version,
+                                source_file=str(yarn_lock.relative_to(extracted_path))
+                            ))
+                            current_package = None
+            except Exception as e:
+                logger.warning(f"Error parsing {yarn_lock}: {e}")
+
+        return dependencies
+
+    async def _fingerprint_sdks(self, extracted_path: Path) -> list[Dependency]:
+        """Fingerprint known SDKs via class pattern detection in Android apps.
+
+        Scans for known SDK class patterns in decompiled source or DEX files.
+        """
+        dependencies = []
+
+        # SDK pattern database: package prefix -> SDK name
+        SDK_PATTERNS = {
+            "com.google.firebase": "Firebase SDK",
+            "com.facebook.sdk": "Facebook SDK",
+            "com.adjust.sdk": "Adjust SDK",
+            "io.sentry": "Sentry SDK",
+            "com.appboy": "Braze SDK (Appboy)",
+            "com.braze": "Braze SDK",
+            "com.appsflyer": "AppsFlyer SDK",
+        }
+
+        detected_sdks = set()
+
+        try:
+            # Search for class files in decompiled source
+            for java_file in extracted_path.rglob("*.java"):
+                if "node_modules" in str(java_file):
+                    continue
+
+                try:
+                    content = java_file.read_text(errors='ignore')
+                    # Look for package declarations and imports
+                    for pattern, sdk_name in SDK_PATTERNS.items():
+                        if pattern in content and sdk_name not in detected_sdks:
+                            detected_sdks.add(sdk_name)
+                            dependencies.append(Dependency(
+                                package_manager="gradle",
+                                name=pattern,
+                                version=None,  # Version unknown from fingerprinting
+                                source_file=str(java_file.relative_to(extracted_path))
+                            ))
+                except Exception as e:
+                    logger.debug(f"Error scanning {java_file}: {e}")
+
+            # Also check smali files if available
+            for smali_file in extracted_path.rglob("*.smali"):
+                try:
+                    content = smali_file.read_text(errors='ignore')
+                    for pattern, sdk_name in SDK_PATTERNS.items():
+                        # Convert Java package to smali format: com/google/firebase
+                        smali_pattern = pattern.replace(".", "/")
+                        if smali_pattern in content and sdk_name not in detected_sdks:
+                            detected_sdks.add(sdk_name)
+                            dependencies.append(Dependency(
+                                package_manager="gradle",
+                                name=pattern,
+                                version=None,
+                                source_file=str(smali_file.relative_to(extracted_path))
+                            ))
+                except Exception as e:
+                    logger.debug(f"Error scanning {smali_file}: {e}")
+
+        except Exception as e:
+            logger.warning(f"SDK fingerprinting error: {e}")
 
         return dependencies
 

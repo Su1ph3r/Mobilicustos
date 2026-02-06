@@ -1,0 +1,151 @@
+rules:
+  - id: android-hardcoded-aes-key
+    languages:
+      - java
+      - kotlin
+    severity: ERROR
+    message: |
+      Hardcoded cryptographic key detected. The application uses a hardcoded key for AES encryption,
+      which means the same key is embedded in every installation of the app. An attacker who
+      decompiles the app can extract this key and decrypt all data encrypted with it.
+
+      Use Android Keystore to generate and store cryptographic keys securely. Keys should never
+      be hardcoded in source code or stored in SharedPreferences/files without encryption.
+    metadata:
+      cwe:
+        - "CWE-321"
+        - "CWE-798"
+      owasp:
+        - "MASVS-CRYPTO-1"
+        - "MASVS-CRYPTO-2"
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+        - https://developer.android.com/training/articles/keystore
+        - https://mobile-security.gitbook.io/masvs/security-requirements/0x07-v2-data_storage_and_privacy_requirements
+    patterns:
+      - pattern-either:
+          - pattern: new SecretKeySpec("...".$BYTES, ...)
+          - pattern: new SecretKeySpec($ARRAY, ...)
+          - pattern: |
+              $KEY = "...";
+              ...
+              new SecretKeySpec($KEY.$BYTES, ...);
+          - pattern: |
+              $KEY = new byte[] { ... };
+              ...
+              new SecretKeySpec($KEY, ...);
+      - pattern-not: new SecretKeySpec($PARAM.$BYTES, ...)
+      - pattern-not: new SecretKeySpec($VAR, ...)
+      - metavariable-pattern:
+          metavariable: $BYTES
+          patterns:
+            - pattern-either:
+                - pattern: getBytes()
+                - pattern: getBytes(...)
+
+  - id: android-hardcoded-des-key
+    languages:
+      - java
+      - kotlin
+    severity: ERROR
+    message: |
+      Hardcoded DES/3DES key detected. DES is a deprecated encryption algorithm considered weak
+      by modern standards (56-bit key). Additionally, this key is hardcoded, allowing attackers
+      to extract it from the decompiled application.
+
+      Migrate to AES-256 encryption and use Android Keystore for key management. Never hardcode
+      cryptographic keys in source code.
+    metadata:
+      cwe:
+        - "CWE-327"
+        - "CWE-321"
+      owasp:
+        - "MASVS-CRYPTO-1"
+        - "MASVS-CRYPTO-2"
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - https://developer.android.com/training/articles/keystore
+    patterns:
+      - pattern-either:
+          - pattern: new SecretKeySpec("...".$BYTES, "DES")
+          - pattern: new SecretKeySpec("...".$BYTES, "DESede")
+          - pattern: new SecretKeySpec($ARRAY, "DES")
+          - pattern: new SecretKeySpec($ARRAY, "DESede")
+      - metavariable-pattern:
+          metavariable: $BYTES
+          patterns:
+            - pattern-either:
+                - pattern: getBytes()
+                - pattern: getBytes(...)
+
+  - id: android-hardcoded-iv
+    languages:
+      - java
+      - kotlin
+    severity: WARNING
+    message: |
+      Hardcoded Initialization Vector (IV) detected. Using a static IV for encryption defeats the
+      purpose of the IV and can lead to vulnerabilities such as chosen-plaintext attacks. The IV
+      should be randomly generated for each encryption operation.
+
+      Use SecureRandom to generate a unique IV for each encryption operation, and store/transmit
+      the IV alongside the ciphertext (IVs are not secret).
+    metadata:
+      cwe:
+        - "CWE-329"
+      owasp:
+        - "MASVS-CRYPTO-1"
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+    patterns:
+      - pattern-either:
+          - pattern: new IvParameterSpec("...".$BYTES)
+          - pattern: new IvParameterSpec(new byte[] { ... })
+          - pattern: |
+              $IV = "...";
+              ...
+              new IvParameterSpec($IV.$BYTES);
+          - pattern: |
+              $IV = new byte[] { ... };
+              ...
+              new IvParameterSpec($IV);
+
+  - id: android-hardcoded-salt
+    languages:
+      - java
+      - kotlin
+    severity: WARNING
+    message: |
+      Hardcoded salt detected in password-based encryption. Using a static salt defeats the purpose
+      of salting and makes the encryption vulnerable to rainbow table attacks. Each password should
+      have a unique, randomly generated salt.
+
+      Use SecureRandom to generate a unique salt for each password/key derivation operation.
+    metadata:
+      cwe:
+        - "CWE-760"
+      owasp:
+        - "MASVS-CRYPTO-1"
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: new PBEParameterSpec("...".$BYTES, ...)
+          - pattern: new PBEParameterSpec(new byte[] { ... }, ...)
+          - pattern: |
+              $SALT = "...";
+              ...
+              new PBEParameterSpec($SALT.$BYTES, ...);

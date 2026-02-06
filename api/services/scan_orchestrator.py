@@ -67,6 +67,7 @@ STATIC_ANALYZERS = {
         "component_security_analyzer",
         "logging_analyzer",
         "permissions_analyzer",
+        "semgrep_analyzer",
     ],
     "ios": [
         "plist_analyzer",
@@ -83,6 +84,7 @@ STATIC_ANALYZERS = {
         "crypto_auditor",
         "dependency_analyzer",
         "privacy_analyzer",
+        "semgrep_analyzer",
     ],
     "cross_platform": [
         "flutter_analyzer",
@@ -417,6 +419,9 @@ class ScanOrchestrator:
             elif analyzer_name == "permissions_analyzer":
                 from api.services.analyzers.permissions_analyzer import PermissionsAnalyzer
                 analyzer = PermissionsAnalyzer()
+            elif analyzer_name == "semgrep_analyzer":
+                from api.services.analyzers.semgrep_analyzer import SemgrepAnalyzer
+                analyzer = SemgrepAnalyzer()
             else:
                 logger.warning(f"Unknown analyzer: {analyzer_name}")
                 return []

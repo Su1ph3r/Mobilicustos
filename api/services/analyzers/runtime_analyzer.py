@@ -11,12 +11,17 @@ Dynamic checks include:
     - Certificate validation bypasses
     - Sensitive data in log output
     - Runtime permission handling
+    - iOS jailbreak detection, Keychain access, biometric bypass
+    - iOS pasteboard leakage, WebView security, URL scheme handling
 
 Note:
     This analyzer requires a connected device with frida-server running
     and is only executed during ``scan_type="dynamic"`` or ``scan_type="full"``
     scans. Flutter apps typically do not trigger Java-level hooks as they
     use Dart/native networking and crypto.
+
+    iOS hooks use ObjC.classes interception and Interceptor.attach on
+    native functions to achieve parity with the Android hook set.
 
 OWASP references:
     - MASVS-STORAGE, MASVS-CRYPTO, MASVS-NETWORK
@@ -493,11 +498,309 @@ setTimeout(function() {
 """
 
 
+IOS_RUNTIME_HOOKS_SCRIPT = r"""
+'use strict';
+
+var findings = [];
+
+function reportFinding(category, title, severity, detail) {
+    findings.push({category: category, title: title, severity: severity, detail: detail});
+    send({type: 'finding', category: category, title: title, severity: severity, detail: detail});
+}
+
+if (ObjC.available) {
+
+    // ---- Jailbreak Detection Hooks ----
+    // 1. NSFileManager fileExistsAtPath: — jailbreak file checks
+    try {
+        var NSFileManager = ObjC.classes.NSFileManager;
+        Interceptor.attach(NSFileManager['- fileExistsAtPath:'].implementation, {
+            onEnter: function(args) {
+                var path = ObjC.Object(args[2]).toString();
+                var jbPaths = ['/Applications/Cydia.app', '/Library/MobileSubstrate',
+                    '/bin/bash', '/usr/sbin/sshd', '/etc/apt', '/usr/bin/ssh',
+                    '/private/var/lib/apt', '/private/var/lib/cydia',
+                    '/private/var/stash', '/private/var/tmp/cydia.log',
+                    '/usr/libexec/sftp-server', '/usr/libexec/ssh-keysign'];
+                for (var i = 0; i < jbPaths.length; i++) {
+                    if (path.indexOf(jbPaths[i]) !== -1) {
+                        reportFinding('Jailbreak Detection', 'Jailbreak detection via fileExistsAtPath:',
+                            'info', 'App checks path: ' + path);
+                        break;
+                    }
+                }
+            }
+        });
+    } catch(e) {}
+
+    // 2. UIApplication canOpenURL: — jailbreak URL scheme detection
+    try {
+        var UIApplication = ObjC.classes.UIApplication;
+        Interceptor.attach(UIApplication['- canOpenURL:'].implementation, {
+            onEnter: function(args) {
+                var url = ObjC.Object(args[2]).toString();
+                if (url.indexOf('cydia://') !== -1 || url.indexOf('sileo://') !== -1) {
+                    reportFinding('Jailbreak Detection', 'Jailbreak detection via canOpenURL:',
+                        'info', 'App checks URL scheme: ' + url);
+                }
+            }
+        });
+    } catch(e) {}
+
+    // ---- Keychain Access ----
+    // 3. SecItemAdd — Keychain writes
+    try {
+        var SecItemAdd = Module.findExportByName('Security', 'SecItemAdd');
+        if (SecItemAdd) {
+            Interceptor.attach(SecItemAdd, {
+                onEnter: function(args) {
+                    try {
+                        var query = ObjC.Object(args[0]);
+                        var klass = query.objectForKey_('class') || query.objectForKey_('kSecClass');
+                        reportFinding('Keychain', 'Keychain item added (SecItemAdd)',
+                            'info', 'SecItemAdd called, class: ' + (klass ? klass.toString() : 'unknown'));
+                    } catch(e2) {
+                        reportFinding('Keychain', 'Keychain item added (SecItemAdd)',
+                            'info', 'SecItemAdd called');
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 4. SecItemCopyMatching — Keychain reads
+    try {
+        var SecItemCopyMatching = Module.findExportByName('Security', 'SecItemCopyMatching');
+        if (SecItemCopyMatching) {
+            Interceptor.attach(SecItemCopyMatching, {
+                onEnter: function(args) {
+                    reportFinding('Keychain', 'Keychain item queried (SecItemCopyMatching)',
+                        'info', 'SecItemCopyMatching called');
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- Insecure Storage ----
+    // 5. NSUserDefaults setObject:forKey:
+    try {
+        var NSUserDefaults = ObjC.classes.NSUserDefaults;
+        Interceptor.attach(NSUserDefaults['- setObject:forKey:'].implementation, {
+            onEnter: function(args) {
+                var key = ObjC.Object(args[3]).toString();
+                var sensitiveKeys = ['password', 'token', 'secret', 'key', 'auth', 'credential', 'session'];
+                var keyLower = key.toLowerCase();
+                for (var i = 0; i < sensitiveKeys.length; i++) {
+                    if (keyLower.indexOf(sensitiveKeys[i]) !== -1) {
+                        reportFinding('Data Storage', 'Sensitive data in NSUserDefaults',
+                            'high', 'NSUserDefaults.setObject:forKey: key="' + key + '" - may contain sensitive data');
+                        break;
+                    }
+                }
+            }
+        });
+    } catch(e) {}
+
+    // 6. NSUserDefaults objectForKey:
+    try {
+        var NSUserDefaults = ObjC.classes.NSUserDefaults;
+        Interceptor.attach(NSUserDefaults['- objectForKey:'].implementation, {
+            onEnter: function(args) {
+                var key = ObjC.Object(args[2]).toString();
+                var sensitiveKeys = ['password', 'token', 'secret', 'key', 'auth'];
+                var keyLower = key.toLowerCase();
+                for (var i = 0; i < sensitiveKeys.length; i++) {
+                    if (keyLower.indexOf(sensitiveKeys[i]) !== -1) {
+                        reportFinding('Data Storage', 'Sensitive data read from NSUserDefaults',
+                            'info', 'NSUserDefaults.objectForKey: key="' + key + '"');
+                        break;
+                    }
+                }
+            }
+        });
+    } catch(e) {}
+
+    // ---- Crypto API Monitoring ----
+    // 7. CCCrypt — CommonCrypto usage
+    try {
+        var CCCrypt = Module.findExportByName('libcommonCrypto.dylib', 'CCCrypt');
+        if (CCCrypt) {
+            Interceptor.attach(CCCrypt, {
+                onEnter: function(args) {
+                    var op = args[0].toInt32();
+                    var alg = args[1].toInt32();
+                    var algNames = {0: 'AES', 1: 'DES', 2: '3DES', 3: 'CAST', 4: 'RC4', 5: 'RC2', 6: 'Blowfish'};
+                    var algName = algNames[alg] || 'Unknown(' + alg + ')';
+                    var opName = op === 0 ? 'Encrypt' : 'Decrypt';
+                    if (alg === 1 || alg === 4 || alg === 5) {
+                        reportFinding('Cryptography', 'Weak cipher used: ' + algName,
+                            'high', 'CCCrypt ' + opName + ' with ' + algName + ' - weak algorithm');
+                    } else {
+                        reportFinding('Cryptography', 'Crypto operation: ' + algName,
+                            'info', 'CCCrypt ' + opName + ' with ' + algName);
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- Biometric Bypass Detection ----
+    // 8. LAContext evaluatePolicy:localizedReason:reply:
+    try {
+        var LAContext = ObjC.classes.LAContext;
+        if (LAContext) {
+            Interceptor.attach(LAContext['- evaluatePolicy:localizedReason:reply:'].implementation, {
+                onEnter: function(args) {
+                    var policy = args[2].toInt32();
+                    var reason = ObjC.Object(args[3]).toString();
+                    var policyName = policy === 1 ? 'DeviceOwnerAuthenticationWithBiometrics' : 'DeviceOwnerAuthentication';
+                    reportFinding('Biometric', 'Biometric authentication invoked',
+                        'info', 'LAContext.evaluatePolicy: ' + policyName + ' reason: "' + reason.substring(0, 100) + '"');
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- Pasteboard Leakage ----
+    // 9. UIPasteboard generalPasteboard — monitor clipboard access
+    try {
+        var UIPasteboard = ObjC.classes.UIPasteboard;
+        Interceptor.attach(UIPasteboard['- setString:'].implementation, {
+            onEnter: function(args) {
+                var text = ObjC.Object(args[2]).toString();
+                reportFinding('Data Leakage', 'Data written to pasteboard',
+                    'medium', 'UIPasteboard.setString: "' + text.substring(0, 80) + '..."');
+            }
+        });
+    } catch(e) {}
+
+    try {
+        var UIPasteboard = ObjC.classes.UIPasteboard;
+        Interceptor.attach(UIPasteboard['- string'].implementation, {
+            onLeave: function(retval) {
+                if (retval && !retval.isNull()) {
+                    var text = ObjC.Object(retval).toString();
+                    reportFinding('Data Leakage', 'Data read from pasteboard',
+                        'info', 'UIPasteboard.string read: "' + text.substring(0, 80) + '..."');
+                }
+            }
+        });
+    } catch(e) {}
+
+    // ---- WebView Security ----
+    // 10. WKWebView loadRequest:
+    try {
+        var WKWebView = ObjC.classes.WKWebView;
+        if (WKWebView) {
+            Interceptor.attach(WKWebView['- loadRequest:'].implementation, {
+                onEnter: function(args) {
+                    var request = ObjC.Object(args[2]);
+                    var url = request.URL().absoluteString().toString();
+                    var severity = 'info';
+                    if (url.indexOf('http://') === 0) { severity = 'high'; }
+                    reportFinding('WebView', 'WKWebView.loadRequest: called',
+                        severity, 'URL: ' + url.substring(0, 500));
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 11. WKWebView evaluateJavaScript:completionHandler:
+    try {
+        var WKWebView = ObjC.classes.WKWebView;
+        if (WKWebView) {
+            Interceptor.attach(WKWebView['- evaluateJavaScript:completionHandler:'].implementation, {
+                onEnter: function(args) {
+                    var script = ObjC.Object(args[2]).toString();
+                    reportFinding('WebView', 'JavaScript evaluated in WKWebView',
+                        'medium', 'evaluateJavaScript: length=' + script.length + ' snippet: ' + script.substring(0, 200));
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- URL Scheme Handling ----
+    // 12. UIApplication openURL:
+    try {
+        var UIApplication = ObjC.classes.UIApplication;
+        Interceptor.attach(UIApplication['- openURL:options:completionHandler:'].implementation, {
+            onEnter: function(args) {
+                var url = ObjC.Object(args[2]).absoluteString().toString();
+                reportFinding('URL Scheme', 'App opened URL via openURL:',
+                    'info', 'UIApplication.openURL: ' + url.substring(0, 300));
+            }
+        });
+    } catch(e) {}
+
+    // ---- Sensitive Logging ----
+    // 13. NSLog — detect sensitive data in logs
+    try {
+        var NSLog = Module.findExportByName('Foundation', 'NSLog');
+        if (NSLog) {
+            var logCount = 0;
+            Interceptor.attach(NSLog, {
+                onEnter: function(args) {
+                    logCount++;
+                    if (logCount === 20) {
+                        reportFinding('Data Leakage', 'Excessive NSLog calls detected',
+                            'low', 'App has made 20+ NSLog calls - may leak sensitive data to device console');
+                    }
+                    if (logCount <= 5) {
+                        try {
+                            var msg = ObjC.Object(args[0]).toString();
+                            var sensitive = ['password', 'token', 'secret', 'key', 'bearer', 'session'];
+                            var msgLower = msg.toLowerCase();
+                            for (var i = 0; i < sensitive.length; i++) {
+                                if (msgLower.indexOf(sensitive[i]) !== -1) {
+                                    reportFinding('Data Leakage', 'Sensitive data in NSLog output',
+                                        'high', 'NSLog contains sensitive keyword "' + sensitive[i] + '" in message');
+                                    break;
+                                }
+                            }
+                        } catch(e2) {}
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // ---- Screenshot Protection ----
+    // 14. Check for UIApplicationDidTakeScreenshotNotification observer
+    try {
+        var screenshotProtected = false;
+        var NSNotificationCenter = ObjC.classes.NSNotificationCenter;
+        Interceptor.attach(NSNotificationCenter['- addObserver:selector:name:object:'].implementation, {
+            onEnter: function(args) {
+                var name = ObjC.Object(args[4]).toString();
+                if (name.indexOf('Screenshot') !== -1 || name.indexOf('CapturedDidChange') !== -1) {
+                    screenshotProtected = true;
+                    reportFinding('Screenshot Protection', 'Screenshot notification observer registered',
+                        'info', 'App monitors for screenshots via: ' + name);
+                }
+            }
+        });
+        setTimeout(function() {
+            if (!screenshotProtected) {
+                reportFinding('Screenshot Protection', 'No screenshot protection detected',
+                    'medium', 'App does not observe UIApplicationUserDidTakeScreenshotNotification');
+            }
+        }, 20000);
+    } catch(e) {}
+
+    send({type: 'hooks_ready', count: 14});
+}
+
+setTimeout(function() {
+    send({type: 'collection_done', findings: findings});
+}, 25000);
+"""
+
+
 class RuntimeAnalyzer(BaseAnalyzer):
     """Dynamic runtime analyzer using Frida instrumentation."""
 
     name = "runtime_analyzer"
-    platform = "android"
+    platform = "cross-platform"
 
     def __init__(self, device_id: str | None = None):
         self.device_id = device_id
@@ -510,9 +813,9 @@ class RuntimeAnalyzer(BaseAnalyzer):
             logger.warning("No package_name on app - skipping runtime analysis")
             return findings
 
-        device_id = self.device_id or await self._find_device()
+        device_id = self.device_id or await self._find_device(app.platform)
         if not device_id:
-            logger.error("No connected Android device found for runtime analysis")
+            logger.error(f"No connected {app.platform} device found for runtime analysis")
             return findings
 
         logger.info(f"Starting runtime analysis of {app.package_name} on device {device_id}")
@@ -542,6 +845,12 @@ class RuntimeAnalyzer(BaseAnalyzer):
                 timeout=15,
             )
 
+            # Select platform-appropriate hook script
+            if app.platform == "ios":
+                script_content = IOS_RUNTIME_HOOKS_SCRIPT
+            else:
+                script_content = RUNTIME_HOOKS_SCRIPT
+
             # Inject hooks
             messages: list[dict] = []
 
@@ -551,7 +860,7 @@ class RuntimeAnalyzer(BaseAnalyzer):
                 elif message.get("type") == "error":
                     logger.warning(f"Frida script error: {message.get('description', '')}")
 
-            script = session.create_script(RUNTIME_HOOKS_SCRIPT)
+            script = session.create_script(script_content)
             script.on("message", on_message)
             await asyncio.to_thread(script.load)
 
@@ -703,6 +1012,27 @@ class RuntimeAnalyzer(BaseAnalyzer):
                 "impact": "Keyboard cache/suggestions on password fields may store sensitive input in plaintext on disk.",
                 "remediation": "Set TYPE_TEXT_FLAG_NO_SUGGESTIONS and appropriate password inputType on sensitive EditText fields.",
             },
+            # iOS-specific categories
+            "Jailbreak Detection": {
+                "cwe_id": "CWE-919", "owasp": "MASVS-RESILIENCE",
+                "impact": "If jailbreak detection is absent or bypassable, attackers on jailbroken devices can tamper with the app.",
+                "remediation": "Implement multi-layered jailbreak detection checking file paths, URL schemes, sandbox integrity, and dyld images.",
+            },
+            "Keychain": {
+                "cwe_id": "CWE-922", "owasp": "MASVS-STORAGE",
+                "impact": "Keychain access patterns reveal how the app stores sensitive data. Improper Keychain usage can expose credentials.",
+                "remediation": "Use kSecAttrAccessibleWhenUnlockedThisDeviceOnly. Enable biometric protection for sensitive Keychain items.",
+            },
+            "Biometric": {
+                "cwe_id": "CWE-287", "owasp": "MASVS-AUTH",
+                "impact": "Biometric authentication bypass could allow unauthorized access to protected features.",
+                "remediation": "Use LAPolicy.deviceOwnerAuthenticationWithBiometrics with Keychain-backed operations, not local-only checks.",
+            },
+            "URL Scheme": {
+                "cwe_id": "CWE-939", "owasp": "MASVS-PLATFORM",
+                "impact": "URL scheme handling may expose sensitive actions or data to other apps via custom URL schemes.",
+                "remediation": "Validate all URL scheme inputs. Use Universal Links instead of custom URL schemes for sensitive actions.",
+            },
         }
 
         meta = category_metadata.get(category, {
@@ -776,8 +1106,22 @@ class RuntimeAnalyzer(BaseAnalyzer):
         }
         return verifications.get(category, "1. Run Frida hooks targeting the relevant API\n2. Use the app normally\n3. Observe hook output for security issues")
 
-    async def _find_device(self) -> str | None:
-        """Find the first connected Android device via ADB."""
+    async def _find_device(self, platform: str = "android") -> str | None:
+        """Find the first connected device via ADB (Android) or idevice (iOS)."""
+        if platform == "ios":
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["idevice_id", "-l"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        return line.strip()
+            except Exception as e:
+                logger.error(f"iOS device discovery failed: {e}")
+            return None
+
         try:
             result = await asyncio.to_thread(
                 subprocess.run,

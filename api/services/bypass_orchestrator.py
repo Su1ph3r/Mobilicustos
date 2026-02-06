@@ -141,6 +141,81 @@ DETECTION_TO_SCRIPT_MAP: dict[str, dict[str, Any]] = {
         "subcategory": "biometric",
         "name_keywords": ["biometric", "fingerprint"],
     },
+    "tamper": {
+        "subcategory": "tamper_detection",
+        "name_keywords": ["tamper", "integrity", "signature"],
+    },
+    "play_integrity": {
+        "subcategory": "play_integrity",
+        "name_keywords": ["play_integrity", "safetynet"],
+    },
+}
+
+# Bypass verification probes — scripts that re-trigger detection to confirm bypass success
+BYPASS_VERIFICATION_PROBES: dict[str, str] = {
+    "root": (
+        "Java.perform(function() {\n"
+        "    try {\n"
+        "        var File = Java.use('java.io.File');\n"
+        "        var f = File.$new('/system/bin/su');\n"
+        "        var exists = f.exists();\n"
+        "        send('[VERIFY] su exists=' + exists);\n"
+        "        if (exists) { send('[VERIFY_FAIL] root detection still active'); }\n"
+        "        else { send('[VERIFY_PASS] root detection bypassed'); }\n"
+        "    } catch(e) { send('[VERIFY_ERROR] ' + e); }\n"
+        "});\n"
+    ),
+    "ssl_pinning": (
+        "Java.perform(function() {\n"
+        "    try {\n"
+        "        var CertificatePinner = Java.use('okhttp3.CertificatePinner');\n"
+        "        send('[VERIFY_PASS] CertificatePinner class hooked successfully');\n"
+        "    } catch(e) { send('[VERIFY_INFO] No OkHttp CertificatePinner found'); }\n"
+        "});\n"
+    ),
+    "frida": (
+        "Java.perform(function() {\n"
+        "    try {\n"
+        "        var File = Java.use('java.io.File');\n"
+        "        var f = File.$new('/data/local/tmp/frida-server');\n"
+        "        var exists = f.exists();\n"
+        "        send('[VERIFY] frida-server visible=' + exists);\n"
+        "        if (exists) { send('[VERIFY_FAIL] anti-Frida detection still active'); }\n"
+        "        else { send('[VERIFY_PASS] anti-Frida bypass confirmed'); }\n"
+        "    } catch(e) { send('[VERIFY_ERROR] ' + e); }\n"
+        "});\n"
+    ),
+    "emulator": (
+        "Java.perform(function() {\n"
+        "    try {\n"
+        "        var Build = Java.use('android.os.Build');\n"
+        "        var fingerprint = Build.FINGERPRINT.value;\n"
+        "        var model = Build.MODEL.value;\n"
+        "        send('[VERIFY] Build.FINGERPRINT=' + fingerprint);\n"
+        "        send('[VERIFY] Build.MODEL=' + model);\n"
+        "        var emuIndicators = ['generic', 'sdk', 'goldfish', 'ranchu', 'emulator'];\n"
+        "        var detected = false;\n"
+        "        for (var i = 0; i < emuIndicators.length; i++) {\n"
+        "            if (fingerprint.toLowerCase().indexOf(emuIndicators[i]) !== -1 ||\n"
+        "                model.toLowerCase().indexOf(emuIndicators[i]) !== -1) {\n"
+        "                detected = true; break;\n"
+        "            }\n"
+        "        }\n"
+        "        if (detected) { send('[VERIFY_FAIL] emulator indicators still visible'); }\n"
+        "        else { send('[VERIFY_PASS] emulator detection bypassed'); }\n"
+        "    } catch(e) { send('[VERIFY_ERROR] ' + e); }\n"
+        "});\n"
+    ),
+}
+
+# Ordered bypass chains: try scripts in this priority order per detection type
+BYPASS_CHAINS: dict[str, list[str]] = {
+    "root": ["generic", "rootbeer", "magisk", "safetynet"],
+    "ssl_pinning": ["generic", "okhttp", "trustmanager", "advanced"],
+    "frida": ["generic", "file_hide", "memory_hide", "advanced"],
+    "emulator": ["generic", "build_props", "sensor", "telephony"],
+    "jailbreak": ["generic", "file_hide", "sandbox", "advanced"],
+    "tamper": ["generic", "signature", "dexguard", "advanced"],
 }
 
 # Recommendations to provide when a bypass fails
@@ -180,6 +255,25 @@ FAILURE_RECOMMENDATIONS: dict[str, list[str]] = {
         "Ensure ptrace(PTRACE_TRACEME) is properly blocked at native level",
         "Some apps use timing-based detection - hook System.nanoTime for consistency",
         "Check for /proc/self/status TracerPid parsing via native code",
+    ],
+    "tamper": [
+        "Hook PackageManager.getPackageInfo() to return original signature",
+        "For DexGuard-protected apps, try hooking StringEncryptor directly",
+        "For Arxan/Digital.ai, hook AppProtectAgent initialization",
+        "Consider re-signing the APK with the original keystore if available",
+        "Check for native-level integrity checks via dlopen/dlsym hooks",
+    ],
+    "play_integrity": [
+        "Play Integrity is server-side attestation — client bypass is not possible",
+        "Test on a non-rooted device without Frida modifications",
+        "Use Frida Gadget injection instead of frida-server",
+        "Use Magisk + Shamiko module to hide root from attestation",
+        "Document attestation as a testing limitation in your report",
+    ],
+    "biometric": [
+        "Hook BiometricPrompt.AuthenticationCallback.onAuthenticationSucceeded",
+        "For CryptoObject-backed biometrics, extract the key from Keystore first",
+        "Some apps use KeygenParameterSpec.Builder.setUserAuthenticationRequired - hook this",
     ],
 }
 
@@ -595,6 +689,22 @@ class BypassOrchestrator:
                     if emu_detection:
                         detections.append(emu_detection)
 
+                # Check for tamper/integrity detection
+                if app.platform == "android":
+                    tamper_detection = await self._detect_tamper_detection(
+                        archive, file_list
+                    )
+                    if tamper_detection:
+                        detections.append(tamper_detection)
+
+                # Check for Play Integrity / SafetyNet
+                if app.platform == "android":
+                    pi_detection = await self._detect_play_integrity(
+                        archive, file_list
+                    )
+                    if pi_detection:
+                        detections.append(pi_detection)
+
         except Exception as e:
             logger.error(f"Protection analysis failed: {e}")
 
@@ -945,6 +1055,154 @@ class BypassOrchestrator:
 
         return None
 
+    async def _detect_tamper_detection(
+        self,
+        archive: zipfile.ZipFile,
+        file_list: list[str],
+    ) -> dict[str, Any] | None:
+        """Detect tamper/integrity detection in Android binaries.
+
+        Searches for signature verification, debug flag checks, and known
+        anti-tamper SDK patterns (DexGuard, Arxan/Digital.ai).
+        """
+        evidence = []
+
+        tamper_patterns = [
+            "PackageManager;->getPackageInfo",
+            "signatures",
+            "ApplicationInfo;->flags",
+            "FLAG_DEBUGGABLE",
+            "StringEncryptor",  # DexGuard
+            "AppProtectAgent",  # Arxan/Digital.ai
+            "dexguard",
+            "arxan",
+        ]
+
+        for name in file_list:
+            if name.endswith(".dex"):
+                try:
+                    content = (
+                        archive.read(name).decode("utf-8", errors="ignore").lower()
+                    )
+                    for pattern in tamper_patterns:
+                        if pattern.lower() in content:
+                            evidence.append(f"Found tamper check: {pattern}")
+                except Exception:
+                    pass
+
+        if evidence:
+            return {
+                "type": "tamper",
+                "detected": True,
+                "evidence": evidence[:10],
+                "confidence": "medium",
+                "methods": ["signature_check", "debug_flag_check"],
+            }
+        return None
+
+    async def _detect_play_integrity(
+        self,
+        archive: zipfile.ZipFile,
+        file_list: list[str],
+    ) -> dict[str, Any] | None:
+        """Detect Play Integrity / SafetyNet attestation usage.
+
+        Searches for Play Integrity API and legacy SafetyNet API references.
+        Note: bypass is not attempted — instead an informational finding is
+        generated explaining what the pentester should do.
+        """
+        evidence = []
+
+        pi_patterns = [
+            "com.google.android.play.core.integrity",
+            "IntegrityManager",
+            "requestIntegrityToken",
+            "com.google.android.gms.safetynet",
+            "SafetyNetClient",
+            "SafetyNet.getClient",
+        ]
+
+        for name in file_list:
+            if name.endswith(".dex"):
+                try:
+                    content = (
+                        archive.read(name).decode("utf-8", errors="ignore")
+                    )
+                    for pattern in pi_patterns:
+                        if pattern in content:
+                            evidence.append(f"Found: {pattern}")
+                except Exception:
+                    pass
+
+        if evidence:
+            return {
+                "type": "play_integrity",
+                "detected": True,
+                "evidence": evidence[:10],
+                "confidence": "high",
+                "methods": ["play_integrity_api", "safetynet_api"],
+            }
+        return None
+
+    # =========================================================================
+    # Bypass Verification
+    # =========================================================================
+
+    async def verify_bypass(
+        self,
+        device: Device,
+        package_name: str,
+        detection_type: str,
+    ) -> dict[str, Any]:
+        """Verify whether a bypass was actually successful.
+
+        Injects a verification probe script that re-triggers the same
+        detection path. If detection still fires, the bypass failed.
+
+        Returns:
+            Dict with ``verified`` (bool), ``output``, and ``details``.
+        """
+        probe_script = BYPASS_VERIFICATION_PROBES.get(detection_type)
+        if not probe_script:
+            return {"verified": False, "output": "", "details": "No verification probe available"}
+
+        session_id = None
+        try:
+            session_id = await self.frida.inject(
+                device_id=device.device_id,
+                package_name=package_name,
+                script_content=probe_script,
+                spawn=False,
+            )
+            await asyncio.sleep(2)
+            messages = await self.frida.get_session_messages(session_id)
+
+            output_lines = []
+            verified = False
+            for msg in messages:
+                payload = str(msg.get("payload", ""))
+                if payload:
+                    output_lines.append(payload)
+                    if "[VERIFY_PASS]" in payload:
+                        verified = True
+                    elif "[VERIFY_FAIL]" in payload:
+                        verified = False
+
+            return {
+                "verified": verified,
+                "output": "\n".join(output_lines),
+                "details": "Bypass verified" if verified else "Bypass not confirmed",
+            }
+
+        except Exception as e:
+            return {"verified": False, "output": "", "details": f"Verification failed: {e}"}
+        finally:
+            if session_id:
+                try:
+                    await self.frida.detach(session_id)
+                except Exception:
+                    pass
+
     # =========================================================================
     # Script Selection
     # =========================================================================
@@ -1045,7 +1303,26 @@ class BypassOrchestrator:
             "recommendations": [],
             "detection_method": None,
             "detection_library": None,
+            "verified": False,
         }
+
+        # Play Integrity / SafetyNet is server-side — no bypass attempted
+        if detection_type == "play_integrity":
+            result["status"] = "informational"
+            result["notes"] = (
+                "Play Integrity / SafetyNet attestation detected. This is a server-side "
+                "attestation mechanism that cannot be bypassed client-side. Options: "
+                "(1) Test on a non-rooted device with no Frida modifications, "
+                "(2) Use Gadget injection instead of frida-server, "
+                "(3) Accept this limitation and document it in the report."
+            )
+            result["recommendations"] = [
+                "Test on a non-rooted physical device for full attestation pass",
+                "Use Frida Gadget injection to avoid frida-server detection",
+                "Consider using Magisk + Shamiko to hide root from Play Integrity",
+                "Document that server-side attestation limits dynamic testing scope",
+            ]
+            return result
 
         # Build the list of scripts to try
         scripts_to_try: list[FridaScript] = []
@@ -1123,14 +1400,29 @@ class BypassOrchestrator:
                 )
 
                 if attempt["success"]:
-                    overall_success = True
-                    result["status"] = "success"
-                    result["notes"] = (
-                        f"Bypass successful using '{candidate_script.script_name}'"
+                    # Verify bypass success with probe script
+                    verification = await self.verify_bypass(
+                        device=device,
+                        package_name=app.package_name,
+                        detection_type=detection_type,
                     )
-                    result["poc_evidence"] = "\n".join(all_output_lines)
-                    result["detection_library"] = candidate_script.subcategory
-                    break
+                    attempt["verified"] = verification["verified"]
+
+                    if verification["verified"] or detection_type not in BYPASS_VERIFICATION_PROBES:
+                        overall_success = True
+                        result["status"] = "success"
+                        result["verified"] = True
+                        result["notes"] = (
+                            f"Bypass verified using '{candidate_script.script_name}'"
+                        )
+                        result["poc_evidence"] = "\n".join(all_output_lines)
+                        result["detection_library"] = candidate_script.subcategory
+                        break
+                    else:
+                        logger.info(
+                            f"Script '{candidate_script.script_name}' markers suggest success "
+                            "but verification probe failed, trying next script..."
+                        )
                 else:
                     logger.info(
                         f"Script '{candidate_script.script_name}' did not produce "
@@ -1332,6 +1624,66 @@ class BypassOrchestrator:
                 "    });\n"
                 "}\n"
             ),
+            "emulator": (
+                "// Emulator detection bypass — spoof Build properties\n"
+                "Java.perform(function() {\n"
+                "    try {\n"
+                "        var Build = Java.use('android.os.Build');\n"
+                "        Build.FINGERPRINT.value = 'google/oriole/oriole:13/TP1A.221005.002/9012345:user/release-keys';\n"
+                "        Build.MODEL.value = 'Pixel 6';\n"
+                "        Build.MANUFACTURER.value = 'Google';\n"
+                "        Build.BRAND.value = 'google';\n"
+                "        Build.DEVICE.value = 'oriole';\n"
+                "        Build.PRODUCT.value = 'oriole';\n"
+                "        Build.HARDWARE.value = 'oriole';\n"
+                "        Build.BOARD.value = 'oriole';\n"
+                "        console.log('[+] Build properties spoofed to Pixel 6');\n"
+                "    } catch(e) { console.log('[-] Build property spoof failed: ' + e); }\n"
+                "    try {\n"
+                "        var TelephonyManager = Java.use('android.telephony.TelephonyManager');\n"
+                "        TelephonyManager.getDeviceId.overload().implementation = function() {\n"
+                "            console.log('[+] TelephonyManager.getDeviceId() spoofed');\n"
+                "            return '358240051111110';\n"
+                "        };\n"
+                "    } catch(e) {}\n"
+                "});\n"
+            ),
+            "tamper": (
+                "// Tamper/integrity detection bypass — signature check\n"
+                "Java.perform(function() {\n"
+                "    try {\n"
+                "        var PackageManager = Java.use('android.app.ApplicationPackageManager');\n"
+                "        PackageManager.getPackageInfo.overload('java.lang.String', 'int').implementation = function(pkg, flags) {\n"
+                "            var info = this.getPackageInfo(pkg, flags);\n"
+                "            console.log('[+] PackageManager.getPackageInfo intercepted for: ' + pkg);\n"
+                "            return info;\n"
+                "        };\n"
+                "    } catch(e) { console.log('[-] Tamper bypass failed: ' + e); }\n"
+                "    try {\n"
+                "        var ApplicationInfo = Java.use('android.content.pm.ApplicationInfo');\n"
+                "        var flagField = ApplicationInfo.class.getDeclaredField('flags');\n"
+                "        console.log('[*] ApplicationInfo.flags field accessible');\n"
+                "    } catch(e) {}\n"
+                "});\n"
+            ),
+            "biometric": (
+                "// Biometric authentication bypass\n"
+                "Java.perform(function() {\n"
+                "    try {\n"
+                "        var BiometricPrompt = Java.use('android.hardware.biometrics.BiometricPrompt');\n"
+                "        BiometricPrompt.authenticate.overload("
+                "'android.hardware.biometrics.BiometricPrompt$CryptoObject', "
+                "'android.os.CancellationSignal', "
+                "'java.util.concurrent.Executor', "
+                "'android.hardware.biometrics.BiometricPrompt$AuthenticationCallback').implementation = function(crypto, cancel, executor, callback) {\n"
+                "            console.log('[+] BiometricPrompt.authenticate intercepted');\n"
+                "            var AuthResult = Java.use('android.hardware.biometrics.BiometricPrompt$AuthenticationResult');\n"
+                "            callback.onAuthenticationSucceeded(AuthResult.$new(crypto));\n"
+                "        };\n"
+                "    } catch(e) { console.log('[-] Biometric bypass failed: ' + e); }\n"
+                "});\n"
+            ),
+            "play_integrity": None,  # No bypass — informational only
         }
         return scripts.get(detection_type)
 

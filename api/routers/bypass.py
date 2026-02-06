@@ -186,6 +186,7 @@ async def auto_bypass(
                 "success": sum(1 for r in results if r["status"] == "success"),
                 "partial": sum(1 for r in results if r["status"] == "partial"),
                 "failed": sum(1 for r in results if r["status"] == "failed"),
+                "informational": sum(1 for r in results if r["status"] == "informational"),
             },
         }
     except Exception as e:

@@ -1,0 +1,140 @@
+rules:
+  - id: ios-sensitive-data-nsuserdefaults
+    languages:
+      - swift
+    severity: WARNING
+    message: |
+      Sensitive data may be stored in NSUserDefaults/UserDefaults. NSUserDefaults stores data
+      in an unencrypted plist file that can be easily extracted from device backups or by
+      attackers with physical access to the device.
+
+      Never store sensitive data (passwords, tokens, API keys, personal information) in
+      NSUserDefaults. Use the iOS Keychain (Security framework) for storing sensitive data
+      securely with hardware-backed encryption.
+    metadata:
+      cwe:
+        - "CWE-312"
+        - "CWE-922"
+      owasp:
+        - "MASVS-STORAGE-1"
+        - "MASVS-STORAGE-2"
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+        - https://developer.apple.com/documentation/security/keychain_services
+        - https://mobile-security.gitbook.io/masvs/security-requirements/0x07-v2-data_storage_and_privacy_requirements
+    patterns:
+      - pattern-either:
+          # Swift UserDefaults
+          - pattern: UserDefaults.standard.set($VALUE, forKey:$KEY)
+          - pattern: UserDefaults.standard.setValue($VALUE, forKey:$KEY)
+          # Objective-C style
+          - pattern: NSUserDefaults.standardUserDefaults().setObject($VALUE, forKey:$KEY)
+      - metavariable-pattern:
+          metavariable: $KEY
+          patterns:
+            - pattern-either:
+                - pattern-regex: '.*[Pp]assword.*'
+                - pattern-regex: '.*[Tt]oken.*'
+                - pattern-regex: '.*[Aa]pi[Kk]ey.*'
+                - pattern-regex: '.*[Ss]ecret.*'
+                - pattern-regex: '.*[Cc]redential.*'
+                - pattern-regex: '.*[Aa]uth.*'
+                - pattern-regex: '.*[Ss]ession.*'
+                - pattern-regex: '.*[Pp]in.*'
+                - pattern-regex: '.*[Cc]redit[Cc]ard.*'
+                - pattern-regex: '.*[Ss][Ss][Nn].*'
+
+  - id: ios-nsuserdefaults-password
+    languages:
+      - swift
+    severity: ERROR
+    message: |
+      Password or authentication token stored in NSUserDefaults. This is a critical security
+      vulnerability as NSUserDefaults data is stored unencrypted and can be extracted from
+      device backups or by attackers with device access.
+
+      Use the iOS Keychain to store passwords and authentication tokens securely. The Keychain
+      provides hardware-backed encryption and cannot be accessed by other apps or extracted
+      from backups (when properly configured).
+    metadata:
+      cwe:
+        - "CWE-256"
+        - "CWE-522"
+      owasp:
+        - "MASVS-STORAGE-1"
+        - "MASVS-AUTH-2"
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - https://developer.apple.com/documentation/security/keychain_services
+    patterns:
+      - pattern-either:
+          - pattern: UserDefaults.standard.set($PASSWORD, forKey:"password")
+          - pattern: UserDefaults.standard.set($PASSWORD, forKey:"auth_token")
+          - pattern: UserDefaults.standard.set($PASSWORD, forKey:"access_token")
+          - pattern: UserDefaults.standard.set($PASSWORD, forKey:"api_key")
+          - pattern: UserDefaults.standard.set($PASSWORD, forKey:"apiKey")
+
+  - id: ios-unencrypted-file-storage
+    languages:
+      - swift
+    severity: WARNING
+    message: |
+      Sensitive data may be written to unencrypted file storage. Files written to the Documents
+      or Library directories are included in device backups and can be accessed by attackers
+      with physical device access or access to backup files.
+
+      For sensitive data, use Data Protection APIs (FileProtectionType) to encrypt files at rest,
+      or use the iOS Keychain for small sensitive values. Set appropriate file protection levels
+      based on data sensitivity.
+    metadata:
+      cwe:
+        - "CWE-311"
+      owasp:
+        - "MASVS-STORAGE-1"
+        - "MASVS-STORAGE-2"
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      references:
+        - https://developer.apple.com/documentation/uikit/protecting_the_user_s_privacy/encrypting_your_app_s_files
+    patterns:
+      - pattern-either:
+          - pattern: $DATA.write(to:$URL, options:...)
+          - pattern: try $DATA.write(to:$URL)
+          - pattern: FileManager.default.createFile(atPath:$PATH, contents:$DATA, attributes:...)
+      - pattern-not: $DATA.write(to:$URL, options:.completeFileProtection)
+      - pattern-not: $DATA.write(to:$URL, options:.completeFileProtectionUnlessOpen)
+      - pattern-not: $DATA.write(to:$URL, options:.completeFileProtectionUntilFirstUserAuthentication)
+
+  - id: ios-keychain-missing-access-control
+    languages:
+      - swift
+    severity: INFO
+    message: |
+      Keychain item created with SecItemAdd. Ensure that you set appropriate access control
+      flags using kSecAttrAccessible to restrict when the keychain item can be accessed.
+
+      Use kSecAttrAccessibleWhenUnlockedThisDeviceOnly or kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      for sensitive data, and consider using SecAccessControlCreateWithFlags to require biometric
+      authentication for highly sensitive items.
+    metadata:
+      cwe:
+        - "CWE-284"
+      owasp:
+        - "MASVS-STORAGE-1"
+        - "MASVS-AUTH-3"
+      category: security
+      confidence: LOW
+      likelihood: LOW
+      impact: MEDIUM
+      references:
+        - https://developer.apple.com/documentation/security/keychain_services/keychain_items/restricting_keychain_item_accessibility
+    pattern: SecItemAdd(...)

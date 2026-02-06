@@ -1,0 +1,86 @@
+rules:
+  - id: android-insecure-webview-javascript
+    languages:
+      - java
+      - kotlin
+    severity: WARNING
+    message: |
+      WebView has JavaScript enabled without proper input validation or Content Security Policy.
+      This can lead to Cross-Site Scripting (XSS) attacks if the WebView loads untrusted content.
+      Ensure that JavaScript is only enabled when necessary, and validate all input loaded into
+      the WebView. Consider implementing a Content Security Policy and using setJavaScriptEnabled(false)
+      for WebViews that load external or user-controlled content.
+    metadata:
+      cwe:
+        - "CWE-79"
+      owasp:
+        - "MASVS-PLATFORM-2"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://owasp.org/www-project-mobile-app-security/
+        - https://developer.android.com/reference/android/webkit/WebSettings#setJavaScriptEnabled(boolean)
+    patterns:
+      - pattern-either:
+          - pattern: $WEBVIEW.getSettings().setJavaScriptEnabled(true)
+          - pattern: |
+              $SETTINGS = $WEBVIEW.getSettings();
+              ...
+              $SETTINGS.setJavaScriptEnabled(true);
+      - pattern-not-inside: |
+          if (...) {
+            ...
+            $WEBVIEW.loadUrl("file://...");
+          }
+
+  - id: android-webview-file-access
+    languages:
+      - java
+      - kotlin
+    severity: WARNING
+    message: |
+      WebView allows file access which can lead to local file disclosure vulnerabilities.
+      setAllowFileAccess(true) enables JavaScript to access local files on the device.
+      Disable file access unless absolutely necessary, and never use it with untrusted content.
+    metadata:
+      cwe:
+        - "CWE-200"
+      owasp:
+        - "MASVS-PLATFORM-2"
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://developer.android.com/reference/android/webkit/WebSettings#setAllowFileAccess(boolean)
+    patterns:
+      - pattern-either:
+          - pattern: $WEBVIEW.getSettings().setAllowFileAccess(true)
+          - pattern: $WEBVIEW.getSettings().setAllowFileAccessFromFileURLs(true)
+          - pattern: $WEBVIEW.getSettings().setAllowUniversalAccessFromFileURLs(true)
+
+  - id: android-webview-addjavascriptinterface
+    languages:
+      - java
+      - kotlin
+    severity: ERROR
+    message: |
+      WebView uses addJavascriptInterface which can allow JavaScript to invoke native Android methods.
+      This is extremely dangerous on Android versions < 4.2 (API 17) and can lead to remote code execution.
+      Only use addJavascriptInterface if absolutely necessary, ensure the app targets API 17+, and use
+      @JavascriptInterface annotation. Never load untrusted content in WebViews with JavaScript interfaces.
+    metadata:
+      cwe:
+        - "CWE-94"
+      owasp:
+        - "MASVS-PLATFORM-2"
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - https://labs.withsecure.com/publications/webview-addjavascriptinterface-remote-code-execution
+        - https://developer.android.com/reference/android/webkit/WebView#addJavascriptInterface(java.lang.Object,%20java.lang.String)
+    pattern: $WEBVIEW.addJavascriptInterface(...)
