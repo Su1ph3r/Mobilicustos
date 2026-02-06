@@ -711,6 +711,9 @@ class RuntimeAnalyzer(BaseAnalyzer):
             "remediation": "Review the finding detail and apply appropriate mitigations.",
         })
 
+        # Build poc_commands based on category
+        poc_cmds = self._get_runtime_poc_commands(category, app)
+
         return self.create_finding(
             app=app,
             title=title,
@@ -720,9 +723,58 @@ class RuntimeAnalyzer(BaseAnalyzer):
             impact=meta["impact"],
             remediation=meta["remediation"],
             poc_evidence=f"Detected by Frida runtime hook: {detail}",
+            poc_verification=self._get_runtime_poc_verification(category),
+            poc_commands=poc_cmds,
+            code_snippet=detail[:300] if detail else None,
             cwe_id=meta.get("cwe_id"),
             owasp_masvs_category=meta.get("owasp"),
         )
+
+    def _get_runtime_poc_commands(self, category: str, app: MobileApp) -> list[dict[str, str]]:
+        """Get PoC commands appropriate for the runtime finding category."""
+        pkg = app.package_name or "<package>"
+        commands: dict[str, list[dict[str, str]]] = {
+            "SSL/TLS": [
+                {"type": "frida", "command": f"frida -U -f {pkg} -l ssl_hooks.js", "description": "Hook TrustManagerFactory.init() to detect null KeyStore"},
+                {"type": "bash", "command": "mitmproxy -p 8080 --ssl-insecure", "description": "Intercept HTTPS traffic with mitmproxy"},
+            ],
+            "SSL Pinning": [
+                {"type": "frida", "command": f"frida -U -f {pkg} -l ssl_pinning_check.js", "description": "Hook certificate pinning APIs"},
+            ],
+            "Cryptography": [
+                {"type": "frida", "command": f"frida -U -f {pkg} -l crypto_hooks.js", "description": "Hook Cipher.getInstance() to log cipher algorithms"},
+            ],
+            "Data Leakage": [
+                {"type": "adb", "command": "adb logcat -d | grep -iE 'password|token|key|secret'", "description": "Check logcat for sensitive data"},
+                {"type": "frida", "command": f"frida -U -f {pkg} -l clipboard_monitor.js", "description": "Monitor clipboard operations"},
+            ],
+            "Screenshot Protection": [
+                {"type": "adb", "command": "adb shell screencap /sdcard/test.png && adb pull /sdcard/test.png", "description": "Attempt screenshot capture"},
+                {"type": "frida", "command": f"frida -U -f {pkg} -l flag_secure_check.js", "description": "Hook Window.setFlags() to check FLAG_SECURE"},
+            ],
+            "Data Storage": [
+                {"type": "adb", "command": f"adb shell run-as {pkg} cat shared_prefs/*.xml", "description": "Read SharedPreferences files"},
+            ],
+            "WebView": [
+                {"type": "frida", "command": f"frida -U -f {pkg} -l webview_hooks.js", "description": "Hook WebView APIs to monitor JavaScript interfaces"},
+            ],
+        }
+        return commands.get(category, [
+            {"type": "frida", "command": f"frida -U -f {pkg} -l runtime_hooks.js", "description": "Run Frida hooks to reproduce this finding"},
+        ])
+
+    def _get_runtime_poc_verification(self, category: str) -> str:
+        """Get verification steps for a runtime finding category."""
+        verifications: dict[str, str] = {
+            "SSL/TLS": "1. Set up mitmproxy with self-signed cert\n2. Configure device proxy\n3. Launch the app\n4. If traffic is intercepted, TLS trust is weak",
+            "SSL Pinning": "1. Install mitmproxy CA cert on device\n2. Launch app through proxy\n3. If connections succeed, pinning is not enforced",
+            "Cryptography": "1. Inject Frida hooks for Cipher.getInstance()\n2. Use the app normally\n3. Review logged cipher transformations for weak algorithms",
+            "Data Leakage": "1. Use the app and monitor logcat output\n2. Check for sensitive data in clipboard after copy operations\n3. Review log entries for tokens, passwords, or keys",
+            "Screenshot Protection": "1. Launch the app and navigate to sensitive screens\n2. Take a screenshot via Power+VolumeDown or ADB\n3. If screenshot contains data, FLAG_SECURE is missing",
+            "Data Storage": "1. On rooted device, read /data/data/<pkg>/shared_prefs/\n2. Check for MODE_WORLD_READABLE/WRITABLE files\n3. Verify sensitive data is not stored in plaintext",
+            "WebView": "1. Hook WebView.addJavascriptInterface()\n2. Check what interfaces are exposed\n3. Verify JavaScript interfaces do not expose dangerous APIs",
+        }
+        return verifications.get(category, "1. Run Frida hooks targeting the relevant API\n2. Use the app normally\n3. Observe hook output for security issues")
 
     async def _find_device(self) -> str | None:
         """Find the first connected Android device via ADB."""

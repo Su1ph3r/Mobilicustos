@@ -126,11 +126,8 @@ class ObfuscationAnalyzer(BaseAnalyzer):
             # Analyze class name entropy in smali/dex
             obfuscation_score, class_stats = await self._analyze_class_names(extracted_path)
 
-            # Check for string encryption
-            string_encryption = await self._check_string_encryption(extracted_path)
-
-            # Check for reflection usage
-            reflection_usage = await self._check_reflection_usage(extracted_path)
+            # Check for string encryption and reflection in a single file pass
+            string_encryption, reflection_usage = await self._check_code_patterns(extracted_path)
 
             # Create findings based on analysis
             if not proguard_enabled and obfuscation_score < 0.3:
@@ -167,9 +164,16 @@ class ObfuscationAnalyzer(BaseAnalyzer):
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-3",
                     owasp_mastg_test="MASTG-TEST-0039",
+                    code_snippet=f"Obfuscation score: {obfuscation_score:.1%} ({class_stats.get('obfuscated', 0)}/{class_stats.get('total', 0)} classes obfuscated)",
+                    poc_evidence=f"No ProGuard/R8 configuration found. {class_stats.get('total', 0) - class_stats.get('obfuscated', 0)} classes have readable names.",
+                    poc_verification=(
+                        "1. Decompile the APK with jadx: jadx -d /tmp/out app.apk\n"
+                        "2. Browse /tmp/out/sources/ to verify class names are readable\n"
+                        "3. Check for business logic, API keys, and other sensitive code"
+                    ),
                     poc_commands=[
-                        {"type": "bash", "command": "jadx -d /tmp/decompiled app.apk", "description": "Decompile APK to check readability"},
-                        {"type": "bash", "command": "ls /tmp/decompiled/sources/", "description": "Check if package/class names are readable"},
+                        {"type": "bash", "command": f"jadx -d /tmp/decompiled {app.file_path or 'app.apk'}", "description": "Decompile APK to check readability"},
+                        {"type": "bash", "command": "find /tmp/decompiled/sources -name '*.java' | head -20", "description": "List decompiled class files to check naming"},
                     ],
                 ))
 
@@ -220,6 +224,8 @@ class ObfuscationAnalyzer(BaseAnalyzer):
 
             # String encryption finding
             if string_encryption:
+                sample_files = [e["file"] for e in string_encryption[:5]]
+                sample_patterns = [e["pattern"] for e in string_encryption[:3]]
                 findings.append(self.create_finding(
                     app=app,
                     title="String Encryption Detected",
@@ -233,10 +239,17 @@ class ObfuscationAnalyzer(BaseAnalyzer):
                     remediation="Ensure encryption keys used for string protection are not easily extractable.",
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-3",
+                    code_snippet="\n".join(sample_patterns) if sample_patterns else None,
+                    poc_evidence=f"Found in: {', '.join(sample_files)}",
+                    poc_verification="1. Decompile the app with jadx\n2. Search for .decrypt() or .deobfuscate() calls\n3. Hook the decryption method with Frida to reveal cleartext strings",
+                    poc_commands=[
+                        {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn 'decrypt\\|deobfuscate\\|StringDecryptor' /tmp/out/", "description": "Search for string decryption patterns"},
+                    ],
                 ))
 
             # Reflection usage finding
             if len(reflection_usage) > 10:
+                sample_reflection = [f"{e['file']}: {e['pattern']}" for e in reflection_usage[:5]]
                 findings.append(self.create_finding(
                     app=app,
                     title=f"Heavy Reflection Usage Detected ({len(reflection_usage)} instances)",
@@ -255,6 +268,12 @@ class ObfuscationAnalyzer(BaseAnalyzer):
                     cwe_id="CWE-693",
                     owasp_masvs_category="MASVS-RESILIENCE",
                     owasp_masvs_control="MASVS-RESILIENCE-3",
+                    code_snippet="\n".join(sample_reflection),
+                    poc_evidence=f"{len(reflection_usage)} reflection calls found across the codebase",
+                    poc_verification="1. Decompile the app\n2. Search for Class.forName() and invoke() calls\n3. Check if class names are from user input or external sources",
+                    poc_commands=[
+                        {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn 'Class.forName\\|getDeclaredMethod\\|DexClassLoader' /tmp/out/", "description": "Search for reflection and dynamic loading usage"},
+                    ],
                 ))
 
             return findings
@@ -371,64 +390,47 @@ class ObfuscationAnalyzer(BaseAnalyzer):
                 entropy -= prob * math.log2(prob)
         return entropy
 
-    async def _check_string_encryption(self, extracted_path: Path) -> list[dict]:
-        """Check for string encryption patterns in source code.
+    async def _check_code_patterns(self, extracted_path: Path) -> tuple[list[dict], list[dict]]:
+        """Check for string encryption and reflection patterns in a single file pass.
 
-        Scans for .decrypt(), .deobfuscate(), StringDecryptor, StringFog,
-        XOR-based operations, and Base64 decode-to-String patterns.
+        Reads each source file once and checks both string encryption and
+        reflection patterns against it, avoiding redundant I/O.
 
         Args:
             extracted_path: Root directory of the extracted APK.
 
         Returns:
-            A list of dicts with 'file', 'line', and 'pattern' keys.
+            A tuple of (string_encryption_results, reflection_results).
         """
-        results = []
+        encryption_results = []
+        reflection_results = []
 
         for ext in [".java", ".kt", ".smali"]:
             for source_file in extracted_path.rglob(f"*{ext}"):
                 try:
                     content = source_file.read_text(errors='ignore')
+                    rel_path = str(source_file.relative_to(extracted_path))
+
+                    # Check string encryption patterns
                     for pattern in STRING_ENCRYPTION_PATTERNS:
                         matches = re.finditer(pattern, content, re.IGNORECASE)
                         for match in matches:
                             line_num = content[:match.start()].count('\n') + 1
-                            results.append({
-                                "file": str(source_file.relative_to(extracted_path)),
+                            encryption_results.append({
+                                "file": rel_path,
                                 "line": line_num,
                                 "pattern": match.group(0),
                             })
-                except Exception:
-                    pass
 
-        return results
-
-    async def _check_reflection_usage(self, extracted_path: Path) -> list[dict]:
-        """Check for reflection-based calls and dynamic class loading.
-
-        Detects Class.forName, getDeclaredMethod, invoke, DexClassLoader,
-        PathClassLoader, and InMemoryDexClassLoader usage.
-
-        Args:
-            extracted_path: Root directory of the extracted APK.
-
-        Returns:
-            A list of dicts with 'file' and 'pattern' keys.
-        """
-        results = []
-
-        for ext in [".java", ".kt", ".smali"]:
-            for source_file in extracted_path.rglob(f"*{ext}"):
-                try:
-                    content = source_file.read_text(errors='ignore')
+                    # Check reflection patterns
                     for pattern in REFLECTION_PATTERNS:
                         if re.search(pattern, content):
-                            results.append({
-                                "file": str(source_file.relative_to(extracted_path)),
+                            reflection_results.append({
+                                "file": rel_path,
                                 "pattern": pattern,
                             })
-                            break  # One per file per pattern is enough
+                            break  # One per file is enough
                 except Exception:
                     pass
 
-        return results
+        return encryption_results, reflection_results

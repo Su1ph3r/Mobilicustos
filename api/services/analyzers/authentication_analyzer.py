@@ -161,29 +161,41 @@ class AuthenticationAnalyzer(BaseAnalyzer):
                 for name in apk.namelist():
                     if name.endswith(".dex"):
                         dex_data = apk.read(name)
-                        dex_text = dex_data.decode("utf-8", errors="ignore")
+                        dex_text = dex_data.decode("utf-8", errors="ignore").replace('\x00', '')
 
                         # Check Android-specific patterns
                         for pattern_name, info in self.ANDROID_AUTH_PATTERNS.items():
-                            if re.search(info["pattern"], dex_text, re.IGNORECASE):
+                            m = re.search(info["pattern"], dex_text, re.IGNORECASE)
+                            if m:
+                                s = max(0, m.start() - 80)
+                                e = min(len(dex_text), m.end() + 80)
+                                ctx = dex_text[s:e].replace('\x00', '').strip()
                                 if info["positive"]:
                                     if "biometric" in pattern_name.lower():
                                         biometric_found = True
-                                    findings.append(self._create_positive_finding(app, info, name))
+                                    findings.append(self._create_positive_finding(app, info, name, ctx))
                                 else:
-                                    findings.append(self._create_negative_finding(app, info, name))
+                                    findings.append(self._create_negative_finding(app, info, name, ctx))
 
                         # Check token patterns
                         for pattern_name, info in self.TOKEN_PATTERNS.items():
-                            if re.search(info["pattern"], dex_text, re.IGNORECASE):
+                            m = re.search(info["pattern"], dex_text, re.IGNORECASE)
+                            if m:
+                                s = max(0, m.start() - 80)
+                                e = min(len(dex_text), m.end() + 80)
+                                ctx = dex_text[s:e].replace('\x00', '').strip()
                                 if not info["positive"]:
-                                    findings.append(self._create_negative_finding(app, info, name))
+                                    findings.append(self._create_negative_finding(app, info, name, ctx))
 
                         # Check session patterns
                         for pattern_name, info in self.SESSION_PATTERNS.items():
-                            if re.search(info["pattern"], dex_text, re.IGNORECASE):
+                            m = re.search(info["pattern"], dex_text, re.IGNORECASE)
+                            if m:
+                                s = max(0, m.start() - 80)
+                                e = min(len(dex_text), m.end() + 80)
+                                ctx = dex_text[s:e].replace('\x00', '').strip()
                                 if not info["positive"]:
-                                    findings.append(self._create_negative_finding(app, info, name))
+                                    findings.append(self._create_negative_finding(app, info, name, ctx))
 
                 # Check if biometric auth is missing
                 if not biometric_found:
@@ -242,21 +254,31 @@ class AuthenticationAnalyzer(BaseAnalyzer):
 
         return findings
 
-    def _create_positive_finding(self, app: MobileApp, info: dict[str, Any], file_path: str) -> Finding:
+    def _create_positive_finding(
+        self, app: MobileApp, info: dict[str, Any], file_path: str, matched_context: str = "",
+    ) -> Finding:
         """Create a positive security finding."""
         return self.create_finding(
             app=app,
             title=f"Security Control Detected: {info['name']}",
             severity=info["severity"],
             category="Authentication",
-            description=f"Positive finding: {info['name']} implementation detected.",
-            impact="This is a positive security control.",
-            remediation="Ensure the implementation follows best practices.",
+            description=f"Positive finding: {info['name']} implementation detected in the application.",
+            impact="This is a positive security control that strengthens authentication.",
+            remediation="Ensure the implementation follows best practices and is applied consistently.",
             file_path=file_path,
+            code_snippet=matched_context[:300] if matched_context else None,
             owasp_masvs_category="MASVS-AUTH",
+            poc_evidence=f"Pattern '{info['pattern']}' matched in {file_path}",
+            poc_verification=f"1. Decompile the app with jadx\n2. Search for '{info['pattern'][:40]}'\n3. Verify the implementation is correct",
+            poc_commands=[
+                {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn '{info['pattern'][:40]}' /tmp/out/", "description": f"Search for {info['name']} implementation"},
+            ],
         )
 
-    def _create_negative_finding(self, app: MobileApp, info: dict[str, Any], file_path: str) -> Finding:
+    def _create_negative_finding(
+        self, app: MobileApp, info: dict[str, Any], file_path: str, matched_context: str = "",
+    ) -> Finding:
         """Create a security issue finding."""
         remediation = self._get_remediation(info["name"])
         return self.create_finding(
@@ -268,10 +290,13 @@ class AuthenticationAnalyzer(BaseAnalyzer):
             impact=self._get_impact(info["name"]),
             remediation=remediation,
             file_path=file_path,
+            code_snippet=matched_context[:300] if matched_context else None,
             cwe_id=self._get_cwe_id(info["name"]),
             cwe_name=self._get_cwe_name(info["name"]),
             owasp_masvs_category="MASVS-AUTH",
             owasp_masvs_control="MASVS-AUTH-1",
+            poc_evidence=f"Pattern '{info['pattern']}' matched in {file_path}",
+            poc_verification=self._get_poc_verification(info["name"]),
             poc_commands=self._get_poc_commands(info["name"], app),
         )
 
@@ -340,6 +365,43 @@ class AuthenticationAnalyzer(BaseAnalyzer):
             ]
         if "Token Logged" in finding_name:
             return [
-                {"type": "adb", "command": f"adb logcat -d | grep -i token", "description": "Search logs for tokens"},
+                {"type": "adb", "command": "adb logcat -d | grep -i token", "description": "Search logs for tokens"},
             ]
         return []
+
+    def _get_poc_verification(self, finding_name: str) -> str:
+        """Get PoC verification steps."""
+        verifications = {
+            "Password in SharedPreferences": (
+                "1. Create an ADB backup: adb backup -f backup.ab <package>\n"
+                "2. Extract the backup archive\n"
+                "3. Search SharedPreferences XML files for password entries\n"
+                "4. On a rooted device: adb shell cat /data/data/<package>/shared_prefs/*.xml"
+            ),
+            "Password in UserDefaults": (
+                "1. On a jailbroken device, access the app's sandbox\n"
+                "2. Read the plist files in Library/Preferences/\n"
+                "3. Check for password values stored in plaintext"
+            ),
+            "Hardcoded Password": (
+                "1. Decompile the app with jadx\n"
+                "2. Search for password assignments in the source\n"
+                "3. Extract the hardcoded value"
+            ),
+            "Weak PIN Check": (
+                "1. Decompile the app with jadx\n"
+                "2. Search for PIN comparison logic\n"
+                "3. Attempt common PINs: 1234, 0000, 1111"
+            ),
+            "Token Logged": (
+                "1. Connect device via ADB\n"
+                "2. Run: adb logcat -d | grep -i token\n"
+                "3. Use the app and check for token leakage in logs"
+            ),
+            "Token in URL Parameter": (
+                "1. Set up mitmproxy or Burp Suite as proxy\n"
+                "2. Use the app and capture HTTP requests\n"
+                "3. Check URLs for token/key query parameters"
+            ),
+        }
+        return verifications.get(finding_name, "1. Decompile the app\n2. Search for the pattern\n3. Verify the security issue")

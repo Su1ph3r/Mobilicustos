@@ -192,7 +192,7 @@ class SSLPinningAnalyzer(BaseAnalyzer):
                 for name in apk.namelist():
                     if name.endswith(".dex"):
                         dex_data = apk.read(name)
-                        dex_text = dex_data.decode("utf-8", errors="ignore")
+                        dex_text = dex_data.decode("utf-8", errors="ignore").replace('\x00', '')
 
                         # Check for pinning patterns
                         for pattern_name, pattern_info in self.ANDROID_PINNING_PATTERNS.items():
@@ -202,11 +202,16 @@ class SSLPinningAnalyzer(BaseAnalyzer):
 
                         # Check for bypass patterns
                         for pattern_name, pattern_info in self.BYPASS_PATTERNS.items():
-                            if re.search(pattern_info["pattern"], dex_text, re.IGNORECASE | re.DOTALL):
+                            match = re.search(pattern_info["pattern"], dex_text, re.IGNORECASE | re.DOTALL)
+                            if match:
                                 bypass_found = True
                                 bypass_details.append(pattern_info["description"])
+                                # Extract context around the match
+                                start = max(0, match.start() - 100)
+                                end = min(len(dex_text), match.end() + 100)
+                                matched_context = dex_text[start:end].strip()
                                 findings.append(self._create_bypass_finding(
-                                    app, pattern_name, pattern_info, name
+                                    app, pattern_name, pattern_info, name, matched_context
                                 ))
 
         except Exception as e:
@@ -545,6 +550,7 @@ TrustKit.initSharedInstance(withConfiguration: trustKitConfig)''',
         pattern_name: str,
         pattern_info: dict[str, Any],
         file_path: str,
+        matched_context: str = "",
     ) -> Finding:
         """Create a critical finding for detected SSL certificate validation bypass.
 
@@ -553,6 +559,7 @@ TrustKit.initSharedInstance(withConfiguration: trustKitConfig)''',
             pattern_name: Internal pattern identifier (e.g., ``"trust_all_certs"``).
             pattern_info: Pattern dict with ``description`` and ``severity``.
             file_path: Archive-relative path where the bypass was found.
+            matched_context: Code context around the matched bypass pattern.
 
         Returns:
             Finding ORM model for the SSL bypass vulnerability.
@@ -575,6 +582,7 @@ TrustKit.initSharedInstance(withConfiguration: trustKitConfig)''',
                 "is needed, use build configurations to enable bypass only in debug builds."
             ),
             file_path=file_path,
+            code_snippet=matched_context[:500] if matched_context else None,
             cwe_id="CWE-295",
             cwe_name="Improper Certificate Validation",
             cvss_score=9.1,
@@ -582,4 +590,53 @@ TrustKit.initSharedInstance(withConfiguration: trustKitConfig)''',
             owasp_masvs_category="MASVS-NETWORK",
             owasp_masvs_control="MASVS-NETWORK-2",
             owasp_mastg_test="MASTG-TEST-0022",
+            poc_evidence=f"Pattern '{pattern_info['description']}' matched in {file_path}",
+            poc_verification=(
+                "1. Extract the APK and decompile with jadx\n"
+                "2. Search for the bypass pattern in decompiled source\n"
+                "3. Set up mitmproxy with a self-signed certificate\n"
+                "4. Verify the app accepts the proxy certificate without errors"
+            ),
+            poc_commands=[
+                {
+                    "type": "bash",
+                    "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn '{pattern_info['pattern'][:60]}' /tmp/out/",
+                    "description": f"Decompile and search for {pattern_info['description']}",
+                },
+                {
+                    "type": "bash",
+                    "command": "mitmproxy -p 8080 --ssl-insecure",
+                    "description": "Start mitmproxy to intercept HTTPS traffic",
+                },
+                {
+                    "type": "adb",
+                    "command": f"adb shell settings put global http_proxy 127.0.0.1:8080",
+                    "description": "Configure device to use proxy",
+                },
+            ],
+            poc_frida_script=f'''// Verify SSL bypass - hook the bypass pattern to confirm it executes
+Java.perform(function() {{
+    // Hook WebViewClient.onReceivedSslError to detect proceed() calls
+    try {{
+        var WebViewClient = Java.use('android.webkit.WebViewClient');
+        WebViewClient.onReceivedSslError.implementation = function(view, handler, error) {{
+            console.log("[!] SSL error handler called - bypass pattern: {pattern_info['description']}");
+            console.log("[!] Error: " + error.toString());
+            console.log("[!] URL: " + error.getUrl());
+            this.onReceivedSslError(view, handler, error);
+        }};
+    }} catch(e) {{
+        console.log("WebViewClient hook failed: " + e);
+    }}
+}});
+''',
+            remediation_code={
+                "java": (
+                    "// REMOVE the SSL bypass code and use proper validation:\n"
+                    "@Override\n"
+                    "public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {\n"
+                    "    handler.cancel();  // Reject invalid certificates\n"
+                    "}"
+                ),
+            },
         )

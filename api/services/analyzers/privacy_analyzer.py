@@ -556,6 +556,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
                         dangerous_permissions.append(name)
 
         if dangerous_permissions:
+            perm_list = ", ".join(dangerous_permissions)
             results.append(AnalyzerResult(
                 title=f"Sensitive Permissions Requested ({len(dangerous_permissions)})",
                 description=f"The app requests access to sensitive user data:\n\n" +
@@ -568,6 +569,18 @@ class PrivacyAnalyzer(BaseAnalyzer):
                 cwe_name="Exposure of Private Personal Information",
                 owasp_masvs_category="MASVS-PRIVACY",
                 owasp_masvs_control="MSTG-PRIVACY-1",
+                code_snippet=perm_list,
+                poc_evidence=f"Dangerous permissions found in manifest: {perm_list}",
+                poc_verification=(
+                    "1. Extract permissions: aapt dump permissions app.apk\n"
+                    "2. Review each dangerous permission for necessity\n"
+                    "3. Test app with permissions revoked to check graceful degradation\n"
+                    "4. Verify runtime permission dialogs are shown before access"
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": f"aapt dump permissions {app.file_path or 'app.apk'}", "description": "List all requested permissions"},
+                    {"type": "adb", "command": f"adb shell dumpsys package {app.package_name or 'package'} | grep permission", "description": "Check granted permissions on device"},
+                ],
                 metadata={"permissions": dangerous_permissions}
             ))
 
@@ -610,6 +623,16 @@ class PrivacyAnalyzer(BaseAnalyzer):
                 cwe_name="Exposure of Private Personal Information",
                 owasp_masvs_category="MASVS-PRIVACY",
                 owasp_masvs_control="MSTG-PRIVACY-1",
+                poc_evidence="Searched XML, JSON, strings, and plist resources for privacy policy URL patterns — none found.",
+                poc_verification=(
+                    "1. Decompile the APK: apktool d app.apk\n"
+                    "2. Search resources: grep -rni 'privacy' res/ assets/\n"
+                    "3. Check strings.xml for privacy_policy or similar keys\n"
+                    "4. Verify no in-app privacy policy link exists"
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": f"apktool d {app.file_path or 'app.apk'} -o /tmp/apk_out && grep -rni 'privacy' /tmp/apk_out/res/ /tmp/apk_out/assets/ || echo 'No privacy policy references found'", "description": "Search for privacy policy references in resources"},
+                ],
             )
 
         return None
@@ -639,6 +662,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
 
             severity = "high" if category == "advertising" else "medium"
 
+            evidence_lines = "\n".join([t.evidence for t in category_trackers])
             results.append(AnalyzerResult(
                 title=f"{category.replace('_', ' ').title()} SDKs Detected ({len(category_trackers)})",
                 description=f"The following {category} SDKs were detected:\n\n{tracker_list}",
@@ -650,6 +674,18 @@ class PrivacyAnalyzer(BaseAnalyzer):
                 cwe_name="Exposure of Private Personal Information",
                 owasp_masvs_category="MASVS-PRIVACY",
                 owasp_masvs_control="MSTG-PRIVACY-3",
+                code_snippet=tracker_list,
+                poc_evidence=evidence_lines,
+                poc_verification=(
+                    "1. Decompile the APK with jadx\n"
+                    "2. Search for SDK package names in source code\n"
+                    "3. Monitor network traffic with mitmproxy for SDK communication\n"
+                    "4. Review data transmitted to tracker endpoints"
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn 'firebase.analytics\\|facebook.ads\\|mixpanel\\|amplitude\\|appsflyer\\|adjust' /tmp/out/ | head -20", "description": "Search for tracking SDK references"},
+                    {"type": "bash", "command": "mitmproxy --mode transparent --showhost", "description": "Monitor network traffic for tracker communication"},
+                ],
                 metadata={
                     "category": category,
                     "trackers": [t.name for t in category_trackers],
@@ -677,6 +713,12 @@ class PrivacyAnalyzer(BaseAnalyzer):
             for pii_type, files in sorted(pii_types.items())
         ])
 
+        # Build code snippet from PII variable matches
+        match_examples = []
+        for f in pii_findings[:5]:
+            match_examples.append(f"  {f['file_path']}: {', '.join(f.get('matches', [])[:3])}")
+        code_snippet = "\n".join(match_examples) if match_examples else ""
+
         return AnalyzerResult(
             title=f"PII Handling Detected in {len(files_with_pii)} Files",
             description=f"PII (Personally Identifiable Information) handling patterns detected:\n\n{pii_summary}\n\nAffected files:\n" +
@@ -689,6 +731,18 @@ class PrivacyAnalyzer(BaseAnalyzer):
             cwe_name="Exposure of Private Personal Information",
             owasp_masvs_category="MASVS-PRIVACY",
             owasp_masvs_control="MSTG-PRIVACY-1",
+            code_snippet=code_snippet,
+            poc_evidence=f"PII variable patterns found in {len(files_with_pii)} files: {', '.join(files_with_pii[:5])}",
+            poc_verification=(
+                "1. Decompile the APK with jadx\n"
+                "2. Search for PII variable names (email, phone, ssn, creditCard, password)\n"
+                "3. Trace data flow from PII variables to storage/network calls\n"
+                "4. Verify encryption is applied before storage or transmission"
+            ),
+            poc_commands=[
+                {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn 'email\\|phone\\|ssn\\|creditCard\\|password' /tmp/out/ | head -20", "description": "Search for PII variable names"},
+                {"type": "bash", "command": "mitmproxy --mode transparent --showhost -w traffic.flow", "description": "Capture traffic to check for PII transmission"},
+            ],
             metadata={
                 "files_count": len(files_with_pii),
                 "files": files_with_pii[:20],
@@ -710,6 +764,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
             unique_files = list(set(files))
             severity = "high" if data_type in ["location", "contacts", "microphone", "camera"] else "medium"
 
+            matched_patterns = list(set(f["pattern"] for f in findings if f["data_type"] == data_type))
             results.append(AnalyzerResult(
                 title=f"{data_type.replace('_', ' ').title()} Data Collection",
                 description=f"The app accesses {data_type.replace('_', ' ')} data via system APIs.\n\nFound in:\n" +
@@ -722,6 +777,17 @@ class PrivacyAnalyzer(BaseAnalyzer):
                 cwe_name="Exposure of Private Personal Information",
                 owasp_masvs_category="MASVS-PRIVACY",
                 owasp_masvs_control="MSTG-PRIVACY-1",
+                code_snippet="API patterns matched: " + ", ".join(matched_patterns[:5]),
+                poc_evidence=f"Data collection APIs for '{data_type}' found in: {', '.join(unique_files[:5])}",
+                poc_verification=(
+                    f"1. Decompile the APK with jadx\n"
+                    f"2. Search for {data_type} API calls: {', '.join(matched_patterns[:3])}\n"
+                    f"3. Verify runtime permission request is shown before access\n"
+                    f"4. Monitor with Frida to confirm data collection at runtime"
+                ),
+                poc_commands=[
+                    {"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn '{matched_patterns[0] if matched_patterns else data_type}' /tmp/out/ | head -10", "description": f"Search for {data_type} API usage"},
+                ],
                 metadata={
                     "data_type": data_type,
                     "files": unique_files,

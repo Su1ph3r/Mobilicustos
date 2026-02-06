@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from api.models.database import MobileApp
-from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
+from api.models.database import Finding, MobileApp
+from api.services.analyzers.base_analyzer import BaseAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -111,14 +111,77 @@ VULNERABLE_PATTERNS = {
 }
 
 
+_STATIC_ASSET_RE = re.compile(
+    r'\.(?:png|jpg|jpeg|gif|svg|ico|css|js|woff|woff2|ttf|eot|mp3|mp4|avi|pdf|zip|tar|gz)(?:\?|$)',
+    re.IGNORECASE,
+)
+
+_SKIP_DOMAIN_RE = re.compile(
+    '|'.join([
+        r'wikipedia\.org', r'wikimedia\.org', r'wiktionary\.org',
+        r'w3\.org', r'schema\.org', r'json-schema\.org', r'xml\.org',
+        r'googleapis\.com/(?:auth|oauth)', r'firebase.*\.com', r'crashlytics',
+        r'play\.google\.com', r'itunes\.apple\.com', r'apps\.apple\.com',
+        r'github\.com', r'githubusercontent\.com', r'gitlab\.com',
+        r'stackoverflow\.com', r'stackexchange\.com',
+        r'example\.com', r'example\.org', r'test\.com',
+        r'localhost', r'127\.0\.0\.1', r'10\.0\.2\.2', r'0\.0\.0\.0',
+        r'apache\.org', r'mozilla\.org', r'creativecommons\.org',
+        r'android\.com/reference', r'developer\.android\.com',
+        r'developer\.apple\.com', r'docs\.oracle\.com',
+        r'maven\.org', r'mvnrepository\.com', r'jcenter\.bintray\.com',
+        r'npmjs\.com', r'unpkg\.com', r'cdnjs\.cloudflare\.com',
+        r'cdn\.jsdelivr\.net', r'fonts\.googleapis\.com', r'fonts\.gstatic\.com',
+        r'google\.com/(?:maps|fonts|chrome|accounts)',
+        r'facebook\.com', r'twitter\.com', r'linkedin\.com', r'instagram\.com',
+        r'youtube\.com', r'youtu\.be',
+        r'cloudflare\.com', r'akamai\.com', r'fastly\.net',
+        r'sentry\.io', r'bugsnag\.com', r'newrelic\.com',
+        r'analytics', r'tracking', r'telemetry',
+        r'gradle\.org', r'kotlin\.org', r'jetbrains\.com',
+        r'flutter\.dev', r'dart\.dev', r'pub\.dev',
+        r'reactnative\.dev', r'reactjs\.org',
+        r'openssl\.org', r'ietf\.org', r'rfc-editor\.org',
+    ]),
+    re.IGNORECASE,
+)
+
+
 class APIEndpointExtractor(BaseAnalyzer):
     """Extracts and analyzes API endpoints from mobile apps."""
 
     name = "api_endpoint_extractor"
     description = "Extracts API endpoints and analyzes them for security issues"
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
+    async def analyze(self, app: MobileApp) -> list[Finding]:
         """Extract and analyze API endpoints."""
+        import shutil
+        import tempfile
+        import zipfile
+
+        if not app.file_path:
+            return []
+
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="api_endpoints_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
+
+            return await self._scan_extracted(app, extracted_path)
+
+        except Exception as e:
+            logger.error(f"API endpoint extraction failed: {e}")
+            return []
+        finally:
+            if extracted_path and extracted_path.exists():
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
+
+    async def _scan_extracted(self, app: MobileApp, extracted_path: Path) -> list[Finding]:
+        """Scan extracted app files for API endpoints."""
         results = []
         endpoints: list[APIEndpoint] = []
         base_urls: list[str] = []
@@ -133,7 +196,7 @@ class APIEndpointExtractor(BaseAnalyzer):
                     continue
 
                 try:
-                    content = source_file.read_text(errors='ignore')
+                    content = source_file.read_text(errors='ignore').replace('\x00', '')
                     rel_path = str(source_file.relative_to(extracted_path))
 
                     # Extract base URLs
@@ -178,9 +241,27 @@ class APIEndpointExtractor(BaseAnalyzer):
         for endpoint in unique_endpoints:
             self._analyze_endpoint_security(endpoint)
 
-        # Create findings
+        # Create findings — store structured endpoint data in metadata
         if unique_endpoints:
-            results.append(self._create_summary_finding(unique_endpoints, base_urls, app))
+            summary = self._create_summary_finding(unique_endpoints, base_urls, app)
+            # Attach structured endpoint data for frontend rendering
+            summary.metadata = {
+                "endpoints": [
+                    {
+                        "url": e.url,
+                        "method": e.method or "GET",
+                        "api_type": e.api_type,
+                        "source_file": e.source_file,
+                        "line_number": e.line_number,
+                        "uses_https": e.uses_https,
+                        "security_issues": e.security_issues,
+                    }
+                    for e in unique_endpoints
+                ],
+                "base_urls": list(set(base_urls)),
+                "total_count": len(unique_endpoints),
+            }
+            results.append(summary)
 
         # Create findings for security issues
         insecure_endpoints = [e for e in unique_endpoints if not e.uses_https]
@@ -198,33 +279,26 @@ class APIEndpointExtractor(BaseAnalyzer):
         return results
 
     def _is_valid_api_url(self, url: str) -> bool:
-        """Check if URL is a valid API endpoint."""
-        # Skip common non-API URLs
-        skip_patterns = [
-            r'\.(?:png|jpg|jpeg|gif|svg|ico|css|js|woff|ttf|eot)$',
-            r'googleapis\.com/(?:auth|oauth)',
-            r'firebase.*\.com',
-            r'crashlytics',
-            r'analytics',
-            r'play\.google\.com',
-            r'itunes\.apple\.com',
-            r'github\.com',
-            r'stackoverflow\.com',
-            r'example\.com',
-            r'localhost',
-            r'127\.0\.0\.1',
-            r'10\.0\.2\.2',  # Android emulator localhost
-        ]
+        """Check if URL is a valid API endpoint (not a content/documentation/asset URL)."""
+        # Skip static assets (pre-compiled regex)
+        if _STATIC_ASSET_RE.search(url):
+            return False
 
-        for pattern in skip_patterns:
-            if re.search(pattern, url, re.IGNORECASE):
-                return False
+        # Skip common non-API domains (single pre-compiled regex)
+        if _SKIP_DOMAIN_RE.search(url):
+            return False
 
-        # Must have a valid host
+        # Must have a valid host with a real domain
         try:
             parsed = urlparse(url)
-            return bool(parsed.netloc and parsed.netloc != 'localhost')
-        except:
+            if not parsed.netloc or parsed.netloc == 'localhost':
+                return False
+            # Skip URLs that are just a bare domain with no path (likely not API)
+            path = parsed.path.strip('/')
+            if not path and '.' in parsed.netloc.lower():
+                return False
+            return True
+        except Exception:
             return False
 
     def _create_endpoint(self, url: str, content: str, file_path: str, position: int) -> APIEndpoint:
@@ -324,7 +398,7 @@ class APIEndpointExtractor(BaseAnalyzer):
         endpoints: list[APIEndpoint],
         base_urls: list[str],
         app: MobileApp
-    ) -> AnalyzerResult:
+    ) -> Finding:
         """Create summary finding for extracted endpoints."""
         # Group by host
         hosts = {}
@@ -350,7 +424,22 @@ class APIEndpointExtractor(BaseAnalyzer):
         insecure_count = len([e for e in endpoints if not e.uses_https])
         debug_count = len([e for e in endpoints if "debug_endpoint" in e.security_issues])
 
-        return AnalyzerResult(
+        # Build endpoint details for code snippet
+        endpoint_details = "\n".join([
+            f"  {e.method or 'GET'} {e.url} ({e.source_file}:{e.line_number or '?'})"
+            for e in endpoints[:15]
+        ])
+        if len(endpoints) > 15:
+            endpoint_details += f"\n  ... and {len(endpoints) - 15} more"
+
+        # Build curl commands for testing top endpoints
+        curl_cmds = []
+        for e in endpoints[:5]:
+            if e.url.startswith("http"):
+                curl_cmds.append({"type": "bash", "command": f"curl -v -k {e.url}", "description": f"Test {e.method or 'GET'} {e.url[:60]}"})
+
+        return self.create_finding(
+            app=app,
             title=f"API Endpoints Extracted ({len(endpoints)} endpoints)",
             description=f"Extracted {len(endpoints)} API endpoints from the application.\n\n**Hosts:**\n{host_summary}\n\n**Base URLs:**\n{base_url_text}",
             severity="info",
@@ -359,30 +448,37 @@ class APIEndpointExtractor(BaseAnalyzer):
             remediation="1. Review all endpoints for proper authentication\n2. Ensure HTTPS is used everywhere\n3. Remove debug endpoints from production\n4. Implement proper API security controls",
             owasp_masvs_category="MASVS-NETWORK",
             owasp_masvs_control="MSTG-NETWORK-1",
-            metadata={
-                "total_endpoints": len(endpoints),
-                "unique_hosts": len(hosts),
-                "base_urls": unique_base_urls,
-                "insecure_count": insecure_count,
-                "endpoints": [
-                    {"url": e.url, "method": e.method, "file": e.source_file}
-                    for e in endpoints[:50]
-                ],
-            }
+            code_snippet=endpoint_details,
+            poc_evidence=f"Extracted {len(endpoints)} endpoints across {len(hosts)} hosts from static analysis.",
+            poc_verification=(
+                "1. Decompile app and search for URL strings\n"
+                "2. Test each endpoint with curl for reachability\n"
+                "3. Check authentication requirements on each endpoint\n"
+                "4. Use Burp Suite/mitmproxy for comprehensive API testing"
+            ),
+            poc_commands=curl_cmds or [{"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn 'http[s]*://' /tmp/out/ | head -20", "description": "Extract URLs from decompiled source"}],
         )
 
     def _create_insecure_transport_finding(
         self,
         endpoints: list[APIEndpoint],
         app: MobileApp
-    ) -> AnalyzerResult:
+    ) -> Finding:
         """Create finding for endpoints using HTTP."""
         endpoint_list = "\n".join([
             f"- {e.url} ({e.source_file}:{e.line_number or '?'})"
             for e in endpoints
         ])
 
-        return AnalyzerResult(
+        # Build curl commands for insecure endpoints
+        curl_cmds = [
+            {"type": "bash", "command": f"curl -v {e.url}", "description": f"Test HTTP endpoint: {e.url[:60]}"}
+            for e in endpoints[:3]
+        ]
+        curl_cmds.append({"type": "bash", "command": "mitmproxy --mode transparent --showhost", "description": "Set up transparent proxy to intercept cleartext traffic"})
+
+        return self.create_finding(
+            app=app,
             title=f"Insecure Transport: {len(endpoints)} HTTP Endpoints",
             description=f"The following endpoints use unencrypted HTTP:\n\n{endpoint_list}",
             severity="high",
@@ -393,21 +489,32 @@ class APIEndpointExtractor(BaseAnalyzer):
             cwe_name="Cleartext Transmission of Sensitive Information",
             owasp_masvs_category="MASVS-NETWORK",
             owasp_masvs_control="MSTG-NETWORK-1",
-            poc_verification="1. Configure proxy (Burp/mitmproxy)\n2. Intercept app traffic\n3. Observe unencrypted requests",
-            metadata={
-                "endpoints": [e.url for e in endpoints],
-            }
+            code_snippet=endpoint_list[:500],
+            poc_evidence=f"{len(endpoints)} HTTP (non-TLS) endpoints found in application code.",
+            poc_verification=(
+                "1. Configure Burp/mitmproxy as transparent proxy\n"
+                "2. Route device traffic through proxy\n"
+                "3. Launch app and exercise functionality\n"
+                "4. Observe unencrypted HTTP requests in proxy log"
+            ),
+            poc_commands=curl_cmds,
         )
 
     def _create_debug_endpoint_finding(
         self,
         endpoints: list[APIEndpoint],
         app: MobileApp
-    ) -> AnalyzerResult:
+    ) -> Finding:
         """Create finding for debug/test endpoints."""
         endpoint_list = "\n".join([f"- {e.url}" for e in endpoints])
 
-        return AnalyzerResult(
+        curl_cmds = [
+            {"type": "bash", "command": f"curl -v -k {e.url}", "description": f"Test debug endpoint: {e.url[:60]}"}
+            for e in endpoints[:3] if e.url.startswith("http")
+        ]
+
+        return self.create_finding(
+            app=app,
             title=f"Debug/Test Endpoints Detected ({len(endpoints)})",
             description=f"Debug or test endpoints found ({len(endpoints)}):\n\n{endpoint_list}",
             severity="medium",
@@ -418,20 +525,32 @@ class APIEndpointExtractor(BaseAnalyzer):
             cwe_name="Active Debug Code",
             owasp_masvs_category="MASVS-CODE",
             owasp_masvs_control="MSTG-CODE-2",
-            metadata={
-                "endpoints": [e.url for e in endpoints],
-            }
+            code_snippet=endpoint_list[:500],
+            poc_evidence=f"{len(endpoints)} debug/test endpoints found in application code.",
+            poc_verification=(
+                "1. Attempt to access each debug endpoint directly\n"
+                "2. Check if endpoints return sensitive data (stack traces, env vars, configs)\n"
+                "3. Verify endpoints are removed in release builds\n"
+                "4. Test if endpoints require authentication"
+            ),
+            poc_commands=curl_cmds or [{"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn '/debug\\|/test\\|/staging' /tmp/out/ | head -10", "description": "Search for debug endpoint references"}],
         )
 
     def _create_exposed_endpoint_finding(
         self,
         endpoints: list[APIEndpoint],
         app: MobileApp
-    ) -> AnalyzerResult:
+    ) -> Finding:
         """Create finding for exposed admin/swagger endpoints."""
         endpoint_list = "\n".join([f"- {e.url}" for e in endpoints])
 
-        return AnalyzerResult(
+        curl_cmds = [
+            {"type": "bash", "command": f"curl -v -k {e.url}", "description": f"Test sensitive endpoint: {e.url[:60]}"}
+            for e in endpoints[:3] if e.url.startswith("http")
+        ]
+
+        return self.create_finding(
+            app=app,
             title=f"Sensitive Endpoints Exposed ({len(endpoints)})",
             description=f"Admin or API documentation endpoints found ({len(endpoints)}):\n\n{endpoint_list}",
             severity="medium",
@@ -442,9 +561,15 @@ class APIEndpointExtractor(BaseAnalyzer):
             cwe_name="Exposure of Sensitive Information",
             owasp_masvs_category="MASVS-NETWORK",
             owasp_masvs_control="MSTG-NETWORK-1",
-            metadata={
-                "endpoints": [e.url for e in endpoints],
-            }
+            code_snippet=endpoint_list[:500],
+            poc_evidence=f"{len(endpoints)} sensitive endpoints (admin/swagger/internal) found.",
+            poc_verification=(
+                "1. Access each endpoint in browser or with curl\n"
+                "2. Check if Swagger UI is accessible without authentication\n"
+                "3. Attempt to access admin functionality\n"
+                "4. Review API documentation for sensitive operations"
+            ),
+            poc_commands=curl_cmds or [{"type": "bash", "command": f"jadx -d /tmp/out {app.file_path or 'app.apk'} && grep -rn '/admin\\|/swagger\\|/api-docs' /tmp/out/ | head -10", "description": "Search for admin/swagger endpoint references"}],
         )
 
     def generate_burp_import(self, endpoints: list[APIEndpoint]) -> str:

@@ -508,6 +508,7 @@ class NetworkAnalyzer(BaseAnalyzer):
                         pass
 
                 if unique_domains:
+                    domain_list = ", ".join(sorted(unique_domains))
                     findings.append(self.create_finding(
                         app=app,
                         title=f"Network endpoints discovered ({len(unique_domains)} domains)",
@@ -516,7 +517,18 @@ class NetworkAnalyzer(BaseAnalyzer):
                         description="The following network endpoints were contacted during runtime analysis.",
                         impact="These endpoints represent the app's network attack surface.",
                         remediation="Ensure all endpoints use HTTPS and implement certificate pinning.",
-                        poc_evidence="Domains contacted: " + ", ".join(sorted(unique_domains)),
+                        poc_evidence="Domains contacted: " + domain_list,
+                        code_snippet=domain_list[:500],
+                        poc_verification=(
+                            f"1. Set up mitmproxy as transparent proxy\n"
+                            f"2. Route device traffic through proxy\n"
+                            f"3. Launch and exercise the app\n"
+                            f"4. Review all domains contacted in mitmproxy flow list"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": "mitmproxy --mode transparent --showhost", "description": "Monitor runtime network traffic"},
+                            {"type": "bash", "command": f"frida -U -f {app.package_name or 'package'} -l network_hooks.js", "description": "Hook network calls with Frida"},
+                        ],
                     ))
 
         except ImportError:
@@ -569,6 +581,17 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Exported components can be invoked by other apps, potentially leaking data or triggering unintended behavior.",
                         remediation="Minimize exported components. Add permission checks to necessary exports.",
                         poc_evidence=f"drozer> run app.package.attacksurface {package}",
+                        code_snippet=f"Activities: {exported_activities}, Services: {exported_services}, Receivers: {exported_receivers}, Providers: {exported_providers}",
+                        poc_verification=(
+                            f"1. Connect to Drozer console: drozer console connect\n"
+                            f"2. Run: run app.package.attacksurface {package}\n"
+                            f"3. Enumerate exported components: run app.activity.info -a {package}\n"
+                            f"4. Attempt to invoke exported activities: run app.activity.start --component {package} <activity>"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"drozer console connect -c 'run app.package.attacksurface {package}'", "description": "Enumerate attack surface"},
+                            {"type": "bash", "command": f"drozer console connect -c 'run app.activity.info -a {package}'", "description": "List exported activities"},
+                        ],
                         cwe_id="CWE-926",
                         owasp_masvs_category="MASVS-PLATFORM",
                     ))
@@ -583,6 +606,16 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Debuggable apps can be attached to with a debugger to inspect memory and modify behavior.",
                         remediation="Set android:debuggable=false for release builds.",
                         poc_evidence=f"drozer> run app.package.attacksurface {package} -> is debuggable",
+                        code_snippet='android:debuggable="true"',
+                        poc_verification=(
+                            f"1. Confirm with Drozer: run app.package.attacksurface {package}\n"
+                            f"2. Attach debugger: jdb -connect com.sun.jdi.SocketAttach:hostname=localhost,port=8700\n"
+                            f"3. Alternative: adb shell run-as {package} id (should succeed on debuggable apps)"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"drozer console connect -c 'run app.package.attacksurface {package}'", "description": "Confirm debuggable flag"},
+                            {"type": "adb", "command": f"adb shell run-as {package} id", "description": "Verify debuggable access via adb"},
+                        ],
                         cwe_id="CWE-489",
                         owasp_masvs_category="MASVS-RESILIENCE",
                     ))
@@ -600,6 +633,16 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Attacker can extract or modify data via SQL injection through exported content provider.",
                         remediation="Use parameterized queries. Set android:exported=false if provider is internal.",
                         poc_evidence=f"drozer> run scanner.provider.injection -a {package}",
+                        code_snippet=sqli.get("description", "")[:300],
+                        poc_verification=(
+                            f"1. Run Drozer injection scanner: run scanner.provider.injection -a {package}\n"
+                            f"2. Query vulnerable provider: run app.provider.query content://<authority>/ --projection \"* FROM sqlite_master--\"\n"
+                            f"3. Extract data: run app.provider.query content://<authority>/ --projection \"* FROM <table>--\""
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"drozer console connect -c 'run scanner.provider.injection -a {package}'", "description": "Scan for SQL injection in content providers"},
+                            {"type": "bash", "command": f"drozer console connect -c 'run app.provider.info -a {package}'", "description": "List content provider URIs"},
+                        ],
                         cwe_id="CWE-89",
                         owasp_masvs_category="MASVS-PLATFORM",
                     ))
@@ -617,6 +660,15 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Attacker can read arbitrary files through the content provider.",
                         remediation="Validate and canonicalize file paths. Restrict accessible directories.",
                         poc_evidence=f"drozer> run scanner.provider.traversal -a {package}",
+                        code_snippet=trav.get("description", "")[:300],
+                        poc_verification=(
+                            f"1. Run Drozer traversal scanner: run scanner.provider.traversal -a {package}\n"
+                            f"2. Attempt path traversal: run app.provider.read content://<authority>/../../etc/hosts\n"
+                            f"3. Try accessing sensitive files: /data/data/{package}/shared_prefs/*.xml"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"drozer console connect -c 'run scanner.provider.traversal -a {package}'", "description": "Scan for path traversal in content providers"},
+                        ],
                         cwe_id="CWE-22",
                         owasp_masvs_category="MASVS-PLATFORM",
                     ))
@@ -660,6 +712,17 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Informational - shows runtime component landscape.",
                         remediation="Review exported activities for unintended exposure.",
                         poc_evidence=f"objection --gadget {package} explore -c 'android hooking list activities'",
+                        code_snippet=output[:500] if output else None,
+                        poc_verification=(
+                            f"1. Launch app with Objection: objection --gadget {package} explore\n"
+                            f"2. Run: android hooking list activities\n"
+                            f"3. Review each activity for android:exported=true\n"
+                            f"4. Attempt to launch exported activities with adb: adb shell am start -n {package}/<activity>"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"objection --gadget {package} explore -c 'android hooking list activities'", "description": "List all loaded activities"},
+                            {"type": "adb", "command": f"adb shell dumpsys package {package} | grep -A5 'Activity'", "description": "List activities via package manager"},
+                        ],
                     ))
 
             # 2. List loaded classes (check for security libraries)
@@ -700,6 +763,16 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Informational - indicates security controls present in the app.",
                         remediation="Ensure detected security libraries are properly configured and not bypassable.",
                         poc_evidence=f"objection --gadget {package} explore -c 'android hooking list classes'",
+                        code_snippet=", ".join(detected_libs),
+                        poc_verification=(
+                            f"1. Launch app with Objection: objection --gadget {package} explore\n"
+                            f"2. Run: android hooking list classes\n"
+                            f"3. Search for security library class names\n"
+                            f"4. Attempt to bypass detected controls with Frida scripts"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"objection --gadget {package} explore -c 'android hooking list classes' | grep -i 'root\\|ssl\\|pin\\|cert\\|trust'", "description": "Search for security library classes"},
+                        ],
                     ))
 
             # 3. Check Android keystore contents
@@ -721,6 +794,17 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Keystore entries may contain cryptographic keys. Review for proper access controls.",
                         remediation="Ensure keystore entries use hardware-backed keys and biometric authentication where appropriate.",
                         poc_evidence=f"objection --gadget {package} explore -c 'android keystore list'",
+                        code_snippet=str(items[:5]),
+                        poc_verification=(
+                            f"1. Launch app with Objection: objection --gadget {package} explore\n"
+                            f"2. Run: android keystore list\n"
+                            f"3. Review each entry's alias and protection level\n"
+                            f"4. Check if keys require user authentication"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"objection --gadget {package} explore -c 'android keystore list'", "description": "List keystore entries"},
+                            {"type": "bash", "command": f"objection --gadget {package} explore -c 'android keystore clear'", "description": "Clear keystore (destructive - use with caution)"},
+                        ],
                         owasp_masvs_category="MASVS-STORAGE",
                     ))
 
@@ -742,6 +826,17 @@ class NetworkAnalyzer(BaseAnalyzer):
                         impact="Informational - reveals filesystem layout of the app.",
                         remediation="Ensure sensitive files are stored in encrypted containers.",
                         poc_evidence=output[:500],
+                        code_snippet=output[:300],
+                        poc_verification=(
+                            f"1. Launch app with Objection: objection --gadget {package} explore\n"
+                            f"2. Run: env\n"
+                            f"3. Browse filesystem: ls /data/data/{package}/\n"
+                            f"4. Check for unencrypted sensitive files in shared_prefs, databases, files"
+                        ),
+                        poc_commands=[
+                            {"type": "bash", "command": f"objection --gadget {package} explore -c 'env'", "description": "Enumerate application paths"},
+                            {"type": "adb", "command": f"adb shell run-as {package} ls -la /data/data/{package}/", "description": "List app data directory"},
+                        ],
                     ))
 
         except Exception as e:
@@ -812,11 +907,38 @@ class NetworkAnalyzer(BaseAnalyzer):
         }.get(category, {"cwe_id": "CWE-319", "owasp": "MASVS-NETWORK",
             "impact": "Network security issue detected.", "remediation": "Review and fix."})
 
+        # Category-specific PoC commands
+        poc_cmds = {
+            "Network": [
+                {"type": "bash", "command": f"frida -U -f {app.package_name or 'package'} -l network_hooks.js", "description": "Rerun Frida network hooks"},
+                {"type": "bash", "command": "mitmproxy --mode transparent --showhost", "description": "Intercept traffic with mitmproxy"},
+            ],
+            "IPC": [
+                {"type": "bash", "command": f"drozer console connect -c 'run app.broadcast.info -a {app.package_name}'", "description": "Enumerate broadcast receivers"},
+                {"type": "adb", "command": f"adb logcat -d | grep -i 'broadcast\\|intent'", "description": "Monitor broadcast intents"},
+            ],
+            "Certificate": [
+                {"type": "bash", "command": f"frida -U -f {app.package_name or 'package'} -l ssl_hooks.js", "description": "Hook TLS certificate validation"},
+                {"type": "bash", "command": "openssl s_client -connect <host>:443 -showcerts", "description": "Inspect server certificate chain"},
+            ],
+            "Cookie": [
+                {"type": "bash", "command": f"frida -U -f {app.package_name or 'package'} -l cookie_hooks.js", "description": "Hook cookie operations"},
+            ],
+        }.get(category, [{"type": "bash", "command": f"frida -U -f {app.package_name or 'package'} -l hooks.js", "description": "Rerun Frida hooks"}])
+
         return self.create_finding(
             app=app, title=title, severity=severity, category=category,
             description=f"Network hook detected: {detail}",
             impact=meta["impact"], remediation=meta["remediation"],
             poc_evidence=f"Detected by Frida network hook: {detail}",
+            code_snippet=detail[:300] if detail else None,
+            poc_verification=(
+                f"1. Connect device and start Frida server\n"
+                f"2. Spawn app with Frida: frida -U -f {app.package_name or 'package'}\n"
+                f"3. Load network hooks script\n"
+                f"4. Exercise app functionality and observe hook output"
+            ),
+            poc_commands=poc_cmds,
             cwe_id=meta.get("cwe_id"), owasp_masvs_category=meta.get("owasp"),
         )
 

@@ -127,7 +127,8 @@ class BackupAnalyzer(BaseAnalyzer):
                     title="Application Backup Enabled Without Restrictions",
                     description=(
                         "The application allows full data backup via ADB without any backup rules. "
-                        f"android:allowBackup is {'not set (defaults to true)' if allow_backup is None else 'set to \"true\"'}. "
+                        "android:allowBackup is "
+                        f"{'not set (defaults to true)' if allow_backup is None else 'set to true'}. "
                         "No fullBackupContent or dataExtractionRules are configured.\n\n"
                         "All application data including SharedPreferences, databases, and internal "
                         "files can be extracted via USB debugging."

@@ -236,30 +236,14 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
             "libraries": native_libs[:20],
         }
 
-        # Check for anti-debugging
+        # Check for anti-debugging, root detection, and emulator detection
+        # Read each smali file ONCE and check all patterns against it
         anti_debug_patterns = [
             r"android\.os\.Debug\.isDebuggerConnected",
             r"ptrace",
             r"TracerPid",
             r"\/proc\/self\/status",
         ]
-        anti_debug_found = []
-
-        for pattern in anti_debug_patterns:
-            for f in extracted_path.rglob("*.smali"):
-                try:
-                    if re.search(pattern, f.read_text(errors='ignore')):
-                        anti_debug_found.append(pattern)
-                        break
-                except:
-                    pass
-
-        protections["anti_debugging"] = {
-            "detected": len(anti_debug_found) > 0,
-            "methods": list(set(anti_debug_found)),
-        }
-
-        # Check for root detection
         root_detection_patterns = [
             r"\/system\/app\/Superuser\.apk",
             r"\/system\/xbin\/su",
@@ -270,27 +254,6 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
             r"isRooted",
             r"checkForRoot",
         ]
-        root_detection_found = []
-
-        for pattern in root_detection_patterns:
-            found = False
-            for f in extracted_path.rglob("*.smali"):
-                try:
-                    if re.search(pattern, f.read_text(errors='ignore'), re.IGNORECASE):
-                        root_detection_found.append(pattern)
-                        found = True
-                        break
-                except:
-                    pass
-            if found:
-                break
-
-        protections["root_jailbreak_detection"] = {
-            "detected": len(root_detection_found) > 0,
-            "methods": list(set(root_detection_found)),
-        }
-
-        # Check for emulator detection
         emulator_patterns = [
             r"Build\.FINGERPRINT.*generic",
             r"Build\.MODEL.*sdk",
@@ -299,20 +262,42 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
             r"goldfish",
             r"isEmulator",
         ]
-        emulator_detection_found = []
 
-        for pattern in emulator_patterns:
-            for f in extracted_path.rglob("*.smali"):
-                try:
-                    if re.search(pattern, f.read_text(errors='ignore'), re.IGNORECASE):
-                        emulator_detection_found.append(pattern)
-                        break
-                except:
-                    pass
+        anti_debug_found = set()
+        root_detection_found = set()
+        emulator_detection_found = set()
+
+        for f in extracted_path.rglob("*.smali"):
+            try:
+                content = f.read_text(errors='ignore')
+            except Exception:
+                continue
+
+            for pattern in anti_debug_patterns:
+                if pattern not in anti_debug_found and re.search(pattern, content):
+                    anti_debug_found.add(pattern)
+
+            for pattern in root_detection_patterns:
+                if pattern not in root_detection_found and re.search(pattern, content, re.IGNORECASE):
+                    root_detection_found.add(pattern)
+
+            for pattern in emulator_patterns:
+                if pattern not in emulator_detection_found and re.search(pattern, content, re.IGNORECASE):
+                    emulator_detection_found.add(pattern)
+
+        protections["anti_debugging"] = {
+            "detected": len(anti_debug_found) > 0,
+            "methods": list(anti_debug_found),
+        }
+
+        protections["root_jailbreak_detection"] = {
+            "detected": len(root_detection_found) > 0,
+            "methods": list(root_detection_found),
+        }
 
         protections["emulator_detection"] = {
             "detected": len(emulator_detection_found) > 0,
-            "methods": list(set(emulator_detection_found)),
+            "methods": list(emulator_detection_found),
         }
 
         return protections
@@ -428,20 +413,26 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
 
     async def _detect_rasp(self, extracted_path: Path) -> dict | None:
         """Detect RASP/Security SDK usage."""
+        # Build a flat list of (compiled_pattern, sdk_name) for efficient scanning
+        rasp_checks = []
         for sdk_name, sdk_info in RASP_SIGNATURES.items():
             for pattern in sdk_info["patterns"]:
-                # Search in all source files
-                for ext in [".java", ".kt", ".smali", ".swift", ".m", ".xml", ".plist"]:
-                    for f in extracted_path.rglob(f"*{ext}"):
-                        try:
-                            if re.search(pattern, f.read_text(errors='ignore'), re.IGNORECASE):
-                                return {
-                                    "sdk": sdk_name,
-                                    "vendor": sdk_info["vendor"],
-                                    "features": sdk_info["features"],
-                                }
-                        except:
-                            pass
+                rasp_checks.append((re.compile(pattern, re.IGNORECASE), sdk_name, sdk_info))
+
+        # Read each file once and check all RASP patterns
+        for ext in [".java", ".kt", ".smali", ".swift", ".m", ".xml", ".plist"]:
+            for f in extracted_path.rglob(f"*{ext}"):
+                try:
+                    content = f.read_text(errors='ignore')
+                except Exception:
+                    continue
+                for compiled_re, sdk_name, sdk_info in rasp_checks:
+                    if compiled_re.search(content):
+                        return {
+                            "sdk": sdk_name,
+                            "vendor": sdk_info["vendor"],
+                            "features": sdk_info["features"],
+                        }
 
         return None
 
@@ -451,6 +442,9 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
 
         # Missing obfuscation
         if not protections.get("obfuscation", {}).get("detected"):
+            # Build a sample of readable class names as evidence
+            class_samples = protections.get("obfuscation", {}).get("class_samples", [])
+            sample_text = "\n".join(class_samples[:5]) if class_samples else "No class samples available"
             results.append(AnalyzerResult(
                 title="Code Obfuscation Not Detected",
                 description="The application does not appear to use code obfuscation. This makes reverse engineering significantly easier.",
@@ -463,6 +457,8 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                 owasp_masvs_category="MASVS-RESILIENCE",
                 owasp_masvs_control="MSTG-RESILIENCE-3",
                 owasp_mastg_test="MASTG-TEST-0039",
+                code_snippet=f"Sample readable class names:\n{sample_text}",
+                poc_evidence="Decompiled class names are fully readable, indicating no obfuscation is applied",
                 poc_verification="1. Use jadx or Hopper to decompile the app\n2. Check if class/method names are readable\n3. Look for clear business logic",
                 poc_commands=[
                     {"type": "bash", "command": "jadx -d /tmp/decompiled app.apk", "description": "Decompile APK with jadx"},
@@ -550,7 +546,7 @@ if IOSSecuritySuite.amIJailbroken() {
             platform = platform_specific.get(app.platform, platform_specific["android"])
             results.append(AnalyzerResult(
                 title="Root/Jailbreak Detection Not Implemented",
-                description="The application does not appear to detect rooted Android devices or jailbroken iOS devices.",
+                description="The application does not appear to detect rooted Android devices or jailbroken iOS devices. No root/jailbreak detection libraries (RootBeer, SafetyNet, IOSSecuritySuite) or common file-check patterns were found.",
                 severity="medium" if app.platform == "android" else "low",
                 category="Binary Protection",
                 impact="Running on compromised devices increases risk of data theft, runtime manipulation, and bypassing security controls.",
@@ -563,6 +559,8 @@ if IOSSecuritySuite.amIJailbroken() {
                 poc_verification="1. Run app on rooted/jailbroken device\n2. Verify app runs without restriction\n3. Check for root/jailbreak detection code",
                 poc_commands=platform["poc_commands"],
                 poc_frida_script=platform["poc_frida"],
+                poc_evidence="No root/jailbreak detection patterns (RootBeer, SafetyNet, /sbin/su checks) found in application binary",
+                code_snippet="// Expected but NOT FOUND:\nRootBeer.isRooted()  // Android\nIOSSecuritySuite.amIJailbroken()  // iOS",
                 cvss_score=4.3,
                 cvss_vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
                 remediation_code=platform["remediation_code"],
@@ -577,13 +575,15 @@ if IOSSecuritySuite.amIJailbroken() {
         if not protections.get("anti_debugging", {}).get("detected"):
             results.append(AnalyzerResult(
                 title="Anti-Debugging Protection Not Detected",
-                description="The application does not appear to implement anti-debugging protections.",
+                description="The application does not appear to implement anti-debugging protections. No Debug.isDebuggerConnected(), ptrace, or timing-based checks were found.",
                 severity="low",
                 category="Binary Protection",
                 impact="Attackers can attach debuggers to analyze runtime behavior, bypass security checks, and extract sensitive data.",
                 remediation="Implement debugger detection using ptrace, timing checks, or Debug.isDebuggerConnected(). Consider using commercial RASP solutions.",
                 cwe_id="CWE-388",
                 cwe_name="Error Handling",
+                code_snippet="// Expected but NOT FOUND:\nDebug.isDebuggerConnected()\nDebug.waitingForDebugger()",
+                poc_evidence="No anti-debugging patterns (isDebuggerConnected, ptrace, TracerPid) found in application binary",
                 owasp_masvs_category="MASVS-RESILIENCE",
                 owasp_masvs_control="MSTG-RESILIENCE-2",
                 owasp_mastg_test="MASTG-TEST-0040",

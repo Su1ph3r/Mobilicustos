@@ -548,7 +548,8 @@ Java.perform(function() {{
                     severity="high",
                     category="Network Security",
                     description=(
-                        "The application explicitly allows clear text (HTTP) traffic. "
+                        "The application explicitly allows clear text (HTTP) traffic via "
+                        "android:usesCleartextTraffic=\"true\" in AndroidManifest.xml. "
                         "This exposes all network communications to interception."
                     ),
                     impact=(
@@ -566,6 +567,17 @@ Java.perform(function() {{
                     cwe_name="Cleartext Transmission of Sensitive Information",
                     owasp_masvs_category="MASVS-NETWORK",
                     owasp_masvs_control="MASVS-NETWORK-1",
+                    poc_evidence="android:usesCleartextTraffic=\"true\" found in AndroidManifest.xml",
+                    poc_verification=(
+                        "1. Set up mitmproxy on port 8080\n"
+                        "2. Configure device proxy to point to mitmproxy\n"
+                        "3. Use the app and observe unencrypted HTTP requests in mitmproxy"
+                    ),
+                    poc_commands=[
+                        {"type": "bash", "command": "mitmproxy -p 8080", "description": "Start mitmproxy to intercept HTTP traffic"},
+                        {"type": "adb", "command": "adb shell settings put global http_proxy 127.0.0.1:8080", "description": "Set device proxy"},
+                        {"type": "bash", "command": f"aapt dump xmltree {app.file_path or 'app.apk'} AndroidManifest.xml | grep -i cleartext", "description": "Verify cleartext traffic setting"},
+                    ],
                 ))
 
         return findings
