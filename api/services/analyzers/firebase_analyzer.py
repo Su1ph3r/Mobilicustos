@@ -1,4 +1,19 @@
-"""Firebase configuration analyzer."""
+"""Firebase configuration security analyzer.
+
+Analyzes Firebase/Google services configuration embedded in mobile
+applications for security misconfigurations and exposed credentials.
+
+Security checks:
+    - Exposed Firebase API keys and project IDs
+    - Publicly accessible Firebase Realtime Database URLs
+    - Sensitive data in Crashlytics logging
+    - Insecure Firebase Storage rules references
+    - Cloud Firestore security rules misconfigurations
+
+OWASP references:
+    - CWE-798: Use of Hard-coded Credentials
+    - MASVS-STORAGE-1
+"""
 
 import json
 import logging
@@ -13,7 +28,12 @@ logger = logging.getLogger(__name__)
 
 
 class FirebaseAnalyzer(BaseAnalyzer):
-    """Analyzes Firebase configuration for security issues."""
+    """Analyzes Firebase and Google services configuration for security issues.
+
+    Scans for exposed Firebase credentials, insecure database URLs,
+    sensitive data in crash reporting, and misconfigured storage rules
+    within application binaries and configuration files.
+    """
 
     name = "firebase_analyzer"
     platform = "cross-platform"

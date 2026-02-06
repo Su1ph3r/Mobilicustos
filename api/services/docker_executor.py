@@ -1,4 +1,20 @@
-"""Docker executor service for running analysis containers."""
+"""Docker executor service for running analysis containers.
+
+Provides an async interface for executing security analysis tools (jadx,
+apktool, blutter, hermes-dec) inside isolated Docker containers. Uses the
+docker-py client to manage container lifecycle.
+
+Architecture:
+    The Mobilicustos API itself runs in a Docker container and spawns
+    **sibling containers** (not nested containers) by mounting the host's
+    Docker socket (``/var/run/docker.sock``). Volume mounts must reference
+    host paths, not container paths -- see ``_container_to_host_path()`` for
+    the path translation logic.
+
+    The ``ANALYZER_TEMP_PATH`` environment variable defines a shared
+    filesystem path that is bind-mounted identically on the host and API
+    container, so no path translation is needed for files under that prefix.
+"""
 
 import asyncio
 import logging
@@ -13,7 +29,17 @@ logger = logging.getLogger(__name__)
 
 
 class DockerExecutor:
-    """Executes analysis tools in Docker containers."""
+    """Executes analysis tools in isolated Docker containers.
+
+    Manages the full container lifecycle: image resolution, container creation,
+    log streaming, result collection, and cleanup. All blocking Docker API
+    calls are delegated to ``asyncio.to_thread`` to avoid blocking the event
+    loop.
+
+    Attributes:
+        client: docker-py ``DockerClient`` initialized from the host environment.
+        network: Docker network name for inter-container communication.
+    """
 
     def __init__(self):
         self.client = docker.from_env()
@@ -45,10 +71,31 @@ class DockerExecutor:
         memory_limit: str = "4g",
         progress_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        """Run an analyzer container and return results.
+        """Run an analysis tool in a Docker container and collect results.
+
+        Creates a detached container with the given image and command, waits
+        for it to complete (with timeout enforcement), collects stdout/stderr,
+        and removes the container.
 
         Args:
-            progress_callback: Optional callback(log_line: str) for streaming progress
+            image: Docker image name and tag (e.g., ``"mobilicustos/jadx:latest"``).
+            command: Command and arguments to execute inside the container.
+            volumes: Docker volume mount specification mapping host paths to
+                container bind mounts (e.g., ``{"/host/path": {"bind": "/container/path", "mode": "ro"}}``).
+            environment: Environment variables to set inside the container.
+            timeout: Maximum execution time in seconds (default 3600 = 1 hour).
+            memory_limit: Container memory limit (default ``"4g"``).
+            progress_callback: Optional callable invoked with each log line
+                for real-time progress streaming.
+
+        Returns:
+            Dict with keys: ``exit_code`` (int), ``stdout`` (str),
+            ``stderr`` (str), ``error`` (str or None).
+
+        Raises:
+            ValueError: If the Docker image is not found.
+            RuntimeError: If the container exits with an error.
+            TimeoutError: If the container exceeds the timeout.
         """
         container_name = f"mobilicustos-analyzer-{uuid.uuid4().hex[:8]}"
 
@@ -117,7 +164,16 @@ class DockerExecutor:
         container,
         callback: Callable[[str], None],
     ) -> None:
-        """Stream container logs to a callback function."""
+        """Stream container logs to a callback function in real time.
+
+        Runs the blocking Docker log stream in a background thread. Each
+        decoded log line is passed to the callback. Exceptions in the
+        callback are caught and logged to prevent stream interruption.
+
+        Args:
+            container: docker-py ``Container`` object to stream from.
+            callback: Callable that receives each log line as a string.
+        """
         def _blocking_stream():
             try:
                 for log_line in container.logs(stream=True, follow=True):
@@ -139,7 +195,28 @@ class DockerExecutor:
         output_path: Path,
         extra_args: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a specific tool on an input file."""
+        """Run a preconfigured analysis tool on an input file.
+
+        Looks up the tool in the internal registry (jadx, apktool, blutter,
+        hermes-dec), configures volume mounts with appropriate path translation
+        for the sibling-container architecture, and delegates to
+        ``run_analyzer()``.
+
+        Args:
+            tool_name: Name of the tool to run. Must be one of: ``"jadx"``,
+                ``"apktool"``, ``"blutter"``, ``"hermes-dec"``.
+            input_path: Path to the input file (e.g., APK, DEX, or Hermes bundle).
+            output_path: Directory path where tool output will be written.
+            extra_args: Additional command-line arguments to append to the
+                tool's default command.
+
+        Returns:
+            Result dict from ``run_analyzer()`` with ``exit_code``, ``stdout``,
+            ``stderr``, and ``error``.
+
+        Raises:
+            ValueError: If the tool name is not recognized.
+        """
         tool_configs = {
             "jadx": {
                 "image": "mobilicustos/jadx:latest",
@@ -194,7 +271,16 @@ class DockerExecutor:
         dockerfile_path: Path,
         tag: str,
     ) -> bool:
-        """Build a Docker image."""
+        """Build a Docker image from a Dockerfile.
+
+        Args:
+            dockerfile_path: Path to the Dockerfile. The parent directory is
+                used as the build context.
+            tag: Image tag to apply (e.g., ``"mobilicustos/jadx:latest"``).
+
+        Returns:
+            True if the image was built successfully, False on failure.
+        """
         try:
             await asyncio.to_thread(
                 self.client.images.build,
@@ -209,7 +295,14 @@ class DockerExecutor:
             return False
 
     async def pull_image(self, image: str) -> bool:
-        """Pull a Docker image."""
+        """Pull a Docker image from a registry.
+
+        Args:
+            image: Full image reference (e.g., ``"mobilicustos/jadx:latest"``).
+
+        Returns:
+            True if the pull succeeded, False on failure.
+        """
         try:
             await asyncio.to_thread(self.client.images.pull, image)
             return True
@@ -218,7 +311,14 @@ class DockerExecutor:
             return False
 
     async def image_exists(self, image: str) -> bool:
-        """Check if a Docker image exists locally."""
+        """Check if a Docker image exists in the local image cache.
+
+        Args:
+            image: Full image reference to check.
+
+        Returns:
+            True if the image is available locally, False otherwise.
+        """
         try:
             await asyncio.to_thread(self.client.images.get, image)
             return True
@@ -226,7 +326,15 @@ class DockerExecutor:
             return False
 
     async def cleanup_old_containers(self, prefix: str = "mobilicustos-analyzer"):
-        """Clean up old analyzer containers."""
+        """Remove exited analyzer containers matching a name prefix.
+
+        Iterates over all containers (including stopped ones) whose names
+        match the prefix and removes those in the ``"exited"`` state.
+
+        Args:
+            prefix: Container name prefix to filter on (default
+                ``"mobilicustos-analyzer"``).
+        """
         containers = await asyncio.to_thread(
             self.client.containers.list,
             all=True,

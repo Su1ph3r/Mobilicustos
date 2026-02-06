@@ -1,4 +1,19 @@
-"""Device manager service for ADB and iOS device management."""
+"""Device manager service for ADB and iOS device management.
+
+Provides an async interface for discovering, connecting to, and managing
+Android (ADB) and iOS (libimobiledevice) devices. Also handles Frida server
+installation/startup and application deployment.
+
+Security:
+    All device ID inputs are validated via ``_validate_device_id()`` before
+    being interpolated into subprocess commands to prevent shell injection.
+
+Supported device types:
+    - Physical Android devices connected via USB (ADB).
+    - Android emulators (AOSP, Genymotion) connected via ADB.
+    - Corellium virtual Android devices connected via API.
+    - Physical iOS devices connected via USB (libimobiledevice).
+"""
 
 import asyncio
 import logging
@@ -36,10 +51,27 @@ def _validate_device_id(device_id: str) -> str:
 
 
 class DeviceManager:
-    """Manages Android and iOS device connections."""
+    """Manages Android and iOS device discovery, connection, and tooling.
+
+    All methods are async and delegate blocking subprocess calls to
+    ``asyncio.to_thread`` to avoid blocking the event loop. Subprocess
+    commands use explicit argument lists (no shell=True) and validated
+    device IDs to prevent command injection.
+    """
 
     async def discover_android_devices(self) -> list[dict[str, Any]]:
-        """Discover connected Android devices via ADB."""
+        """Discover connected Android devices via ``adb devices -l``.
+
+        Parses the output of ADB to find all non-offline devices, then
+        queries each device for detailed information (model, OS version,
+        root status, emulator detection).
+
+        Returns:
+            List of device info dicts with keys: ``device_id``, ``device_type``
+            (``"physical"``/``"emulator"``/``"genymotion"``), ``platform``,
+            ``connection_type``, ``model``, ``os_version``, ``is_rooted``, etc.
+            Returns an empty list if ADB is unavailable or no devices found.
+        """
         devices = []
 
         try:
@@ -71,7 +103,21 @@ class DeviceManager:
         return devices
 
     async def _get_android_device_info(self, device_id: str) -> dict[str, Any]:
-        """Get detailed info for an Android device."""
+        """Get detailed info for an Android device via ADB shell getprop.
+
+        Queries device properties including model name, OS version, root
+        status (presence of ``su`` binary), and device type (physical vs.
+        emulator vs. Genymotion).
+
+        Args:
+            device_id: Validated ADB device serial string.
+
+        Returns:
+            Dict with device metadata. Always contains ``device_id``,
+            ``device_type``, ``platform``, ``connection_type``, ``status``.
+            Additional keys (``model``, ``os_version``, ``is_rooted``) are
+            populated on a best-effort basis.
+        """
         # Validate device_id to prevent command injection
         device_id = _validate_device_id(device_id)
 
@@ -153,7 +199,17 @@ class DeviceManager:
         return info
 
     async def discover_ios_devices(self) -> list[dict[str, Any]]:
-        """Discover connected iOS devices via libimobiledevice."""
+        """Discover connected iOS devices via ``idevice_id -l``.
+
+        Requires libimobiledevice to be installed on the host system.
+        Typically only available on macOS.
+
+        Returns:
+            List of device info dicts with keys: ``device_id``, ``device_type``,
+            ``platform``, ``device_name``, ``model``, ``os_version``, etc.
+            Returns an empty list if libimobiledevice is not installed or
+            no devices are connected.
+        """
         devices = []
 
         try:
@@ -180,7 +236,15 @@ class DeviceManager:
         return devices
 
     async def _get_ios_device_info(self, device_id: str) -> dict[str, Any]:
-        """Get detailed info for an iOS device."""
+        """Get detailed info for an iOS device via ``ideviceinfo``.
+
+        Args:
+            device_id: Validated iOS device UDID string.
+
+        Returns:
+            Dict with device metadata including ``device_name``, ``model``
+            (ProductType), and ``os_version`` (ProductVersion) when available.
+        """
         # Validate device_id to prevent command injection
         device_id = _validate_device_id(device_id)
 
@@ -221,7 +285,21 @@ class DeviceManager:
         return info
 
     async def connect(self, device: Device) -> bool:
-        """Establish connection to a device."""
+        """Establish and verify connection to a device.
+
+        Dispatches to platform-specific connection logic based on the
+        device's platform field. For Corellium virtual devices, uses the
+        Corellium REST API to verify instance state.
+
+        Args:
+            device: Device ORM model with ``platform`` and ``device_id`` set.
+
+        Returns:
+            True if the device is reachable and in a connected state.
+
+        Raises:
+            ValueError: If the device platform is not ``"android"`` or ``"ios"``.
+        """
         if device.platform == "android":
             return await self._connect_android(device)
         elif device.platform == "ios":
@@ -230,7 +308,15 @@ class DeviceManager:
             raise ValueError(f"Unsupported platform: {device.platform}")
 
     async def _connect_android(self, device: Device) -> bool:
-        """Connect to an Android device."""
+        """Verify connectivity to an Android device via ``adb get-state``.
+
+        Args:
+            device: Device ORM model. If ``device_type`` is ``"corellium"``,
+                delegates to ``_connect_corellium_android()``.
+
+        Returns:
+            True if ADB reports the device state as ``"device"`` (connected).
+        """
         try:
             # Validate device_id to prevent command injection
             device_id = _validate_device_id(device.device_id)
@@ -254,7 +340,14 @@ class DeviceManager:
             return False
 
     async def _connect_ios(self, device: Device) -> bool:
-        """Connect to an iOS device."""
+        """Verify connectivity to an iOS device via ``ideviceinfo``.
+
+        Args:
+            device: Device ORM model with a valid iOS UDID.
+
+        Returns:
+            True if ``ideviceinfo`` exits with return code 0.
+        """
         try:
             # Validate device_id to prevent command injection
             device_id = _validate_device_id(device.device_id)
@@ -271,7 +364,18 @@ class DeviceManager:
             return False
 
     async def _connect_corellium_android(self, device: Device) -> bool:
-        """Connect to a Corellium Android virtual device."""
+        """Verify a Corellium Android virtual device is powered on.
+
+        Uses the Corellium REST API to query instance state. Requires
+        ``corellium_api_key`` and ``corellium_domain`` in application settings
+        and ``corellium_instance_id`` on the device record.
+
+        Args:
+            device: Device ORM model with ``corellium_instance_id`` set.
+
+        Returns:
+            True if the Corellium instance state is ``"on"``.
+        """
         try:
             from api.services.corellium_service import CorelliumClient
 
@@ -301,7 +405,21 @@ class DeviceManager:
             return False
 
     async def install_frida_server(self, device: Device) -> str:
-        """Install Frida server on a device."""
+        """Install Frida server on a device.
+
+        Downloads the appropriate frida-server binary from the official
+        GitHub releases for the device's CPU architecture, then deploys it.
+
+        Args:
+            device: Device ORM model with ``platform`` and ``device_id`` set.
+
+        Returns:
+            The installed Frida server version string.
+
+        Raises:
+            ValueError: If the device platform is unsupported.
+            RuntimeError: If download, extraction, or installation fails.
+        """
         version = settings.frida_server_version
 
         if device.platform == "android":
@@ -312,7 +430,23 @@ class DeviceManager:
             raise ValueError(f"Unsupported platform: {device.platform}")
 
     async def _install_frida_android(self, device: Device, version: str) -> str:
-        """Install Frida server on Android."""
+        """Download and install frida-server on an Android device.
+
+        Performs the full deployment pipeline: detect CPU architecture,
+        download the matching frida-server xz archive from GitHub, extract it,
+        push via ``adb push`` to ``/data/local/tmp/frida-server``, and set
+        executable permissions.
+
+        Args:
+            device: Device ORM model with a valid ADB device ID.
+            version: Frida server version string (e.g., ``"16.5.9"``).
+
+        Returns:
+            The installed version string.
+
+        Raises:
+            RuntimeError: If any step (download, extract, push, chmod) fails.
+        """
         # Validate device_id to prevent command injection
         device_id = _validate_device_id(device.device_id)
 
@@ -394,13 +528,38 @@ class DeviceManager:
         return version
 
     async def _install_frida_ios(self, device: Device, version: str) -> str:
-        """Install Frida on iOS (requires jailbreak)."""
+        """Install Frida on an iOS device (requires jailbreak).
+
+        Note:
+            This is a placeholder. Full iOS Frida installation typically
+            requires Cydia/Sileo or manual deployment via SSH.
+
+        Args:
+            device: Device ORM model with a valid iOS UDID.
+            version: Frida server version string.
+
+        Returns:
+            The version string (no actual installation performed).
+        """
         # Would use Cydia or manual installation
         logger.info(f"Would install Frida {version} on iOS device")
         return version
 
     async def start_frida_server(self, device: Device) -> bool:
-        """Start Frida server on a device."""
+        """Start the frida-server daemon on a device.
+
+        For Android: kills any existing frida-server process, launches a
+        new instance via ``nohup`` with the ``-D`` (daemonize) flag, waits
+        briefly, then verifies the process is running via ``pgrep``.
+
+        For iOS: assumes frida-server is already running (started via SSH).
+
+        Args:
+            device: Device ORM model with ``platform`` and ``device_id`` set.
+
+        Returns:
+            True if frida-server is confirmed running after startup.
+        """
         if device.platform != "android":
             # iOS uses frida-server started via SSH
             return True
@@ -444,7 +603,18 @@ class DeviceManager:
             return False
 
     async def install_app(self, device: Device, app_path: str) -> bool:
-        """Install an app on a device."""
+        """Install an application package on a device.
+
+        Uses ``adb install -r`` for Android (allowing reinstall) or
+        ``ideviceinstaller -i`` for iOS.
+
+        Args:
+            device: Device ORM model with ``platform`` and ``device_id`` set.
+            app_path: Local filesystem path to the APK (Android) or IPA (iOS).
+
+        Returns:
+            True if the installation command exits successfully.
+        """
         # Validate device_id to prevent command injection
         device_id = _validate_device_id(device.device_id)
 
@@ -468,7 +638,23 @@ class DeviceManager:
             return False
 
     async def launch_app(self, device: Device, package_name: str) -> bool:
-        """Launch an app on a device."""
+        """Launch an application on a device.
+
+        For Android, uses ``adb shell monkey`` to trigger the app's launcher
+        activity. The package name is validated against an alphanumeric-with-dots
+        pattern to prevent command injection.
+
+        Args:
+            device: Device ORM model with ``platform`` and ``device_id`` set.
+            package_name: Android package name (e.g., ``"com.example.app"``)
+                or iOS bundle identifier.
+
+        Returns:
+            True if the launch command exits successfully.
+
+        Raises:
+            ValueError: If the package name contains invalid characters.
+        """
         # Validate device_id to prevent command injection
         device_id = _validate_device_id(device.device_id)
 

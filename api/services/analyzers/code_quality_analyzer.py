@@ -1,4 +1,17 @@
-"""Code quality analyzer for injection vulnerabilities and security issues."""
+"""Code quality analyzer for injection vulnerabilities and security anti-patterns.
+
+Scans decompiled application source code for common security vulnerabilities
+including SQL injection, command injection, path traversal, XSS vectors,
+insecure random number generation, and unsafe deserialization.
+
+OWASP references:
+    - CWE-89: SQL Injection
+    - CWE-78: OS Command Injection
+    - CWE-22: Path Traversal
+    - CWE-79: Cross-site Scripting (XSS)
+    - CWE-330: Insecure Random Number Generation
+    - MASVS-CODE
+"""
 
 import logging
 import re
@@ -13,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 class CodeQualityAnalyzer(BaseAnalyzer):
-    """Analyzes code for injection vulnerabilities and security issues."""
+    """Analyzes application source code for injection and security anti-patterns.
+
+    Performs regex-based analysis on decompiled source to detect common
+    vulnerability classes including SQL injection, command injection,
+    path traversal, and insecure cryptographic usage.
+    """
 
     name = "code_quality_analyzer"
     platform = "cross-platform"

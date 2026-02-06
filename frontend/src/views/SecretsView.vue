@@ -99,11 +99,13 @@
               <Button
                 :icon="visibleSecrets.has(data.secret_id) ? 'pi pi-eye-slash' : 'pi pi-eye'"
                 class="p-button-sm p-button-text"
+                v-tooltip="visibleSecrets.has(data.secret_id) ? 'Hide Secret' : 'Show Secret'"
                 @click="toggleSecretVisibility(data.secret_id)"
               />
               <Button
                 icon="pi pi-copy"
                 class="p-button-sm p-button-text"
+                v-tooltip="'Copy to Clipboard'"
                 @click="copySecret(data.value)"
               />
             </div>
@@ -244,6 +246,18 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * SecretsView - Detected secrets and credentials browser with validation capabilities.
+ *
+ * Features:
+ * - Summary cards for total, validated, active, and revoked secrets
+ * - Filterable table by secret type, provider, status, and search text
+ * - Secret value masking with toggle show/hide and clipboard copy
+ * - Secret validation to check if credentials are still active
+ * - Detail dialog with location context, validation results, and remediation steps
+ *
+ * @requires secretsApi - list, validate, summary, types, and providers endpoints
+ */
 import { ref, onMounted } from 'vue'
 import { secretsApi } from '@/services/api'
 import { useToast } from 'primevue/usetoast'

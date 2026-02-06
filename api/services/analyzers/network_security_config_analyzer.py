@@ -1,4 +1,22 @@
-"""Network Security Config analyzer for Android."""
+"""Android Network Security Configuration analyzer.
+
+Parses the ``network_security_config.xml`` file from APK archives to detect
+network security misconfigurations. This XML configuration (introduced in
+Android 7.0 / API 24) controls HTTPS enforcement, certificate pinning, and
+trusted certificate authorities.
+
+Security checks:
+    - Cleartext traffic permitted (globally or per-domain)
+    - Missing certificate pinning for sensitive domains
+    - User-installed CA certificates trusted in production
+    - Debug overrides left enabled
+    - Certificate pin expiration analysis
+
+OWASP references:
+    - CWE-295: Improper Certificate Validation
+    - CWE-319: Cleartext Transmission of Sensitive Information
+    - MASVS-NETWORK-1, MASVS-NETWORK-2
+"""
 
 import logging
 import re
@@ -14,7 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 class NetworkSecurityConfigAnalyzer(BaseAnalyzer):
-    """Analyzes Android network_security_config.xml for security issues."""
+    """Analyzes Android ``network_security_config.xml`` for security misconfigurations.
+
+    Extracts and parses the Network Security Config XML from the APK,
+    checking for cleartext traffic allowance, missing pinning, debug
+    overrides, and trusted user certificates.
+    """
 
     name = "network_security_config_analyzer"
     platform = "android"

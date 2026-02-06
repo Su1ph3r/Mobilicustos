@@ -1,4 +1,22 @@
-"""Authentication implementation analyzer."""
+"""Authentication implementation security analyzer.
+
+Examines mobile application binaries for authentication implementation
+patterns, detecting both positive security controls (biometric auth,
+keystore-backed credentials) and insecure practices (hardcoded passwords,
+weak token storage, missing authentication timeouts).
+
+Security checks:
+    - Biometric authentication (BiometricPrompt, FingerprintManager)
+    - Keystore-backed authentication requirements
+    - Insecure credential storage patterns
+    - OAuth/OIDC implementation quality
+    - Session management weaknesses
+
+OWASP references:
+    - CWE-287: Improper Authentication
+    - CWE-522: Insufficiently Protected Credentials
+    - MASVS-AUTH
+"""
 
 import logging
 import re
@@ -12,7 +30,12 @@ logger = logging.getLogger(__name__)
 
 
 class AuthenticationAnalyzer(BaseAnalyzer):
-    """Analyzes authentication implementation patterns."""
+    """Analyzes authentication implementation patterns for security quality.
+
+    Scans application binaries for authentication-related API usage on both
+    Android and iOS, identifying positive security controls and common
+    authentication vulnerabilities.
+    """
 
     name = "authentication_analyzer"
     platform = "cross-platform"

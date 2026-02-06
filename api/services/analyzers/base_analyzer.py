@@ -1,4 +1,24 @@
-"""Base analyzer class for all static analyzers."""
+"""Base analyzer abstract class and result data structures for static analysis.
+
+Provides the abstract BaseAnalyzer class that all security analyzers must
+subclass, the AnalyzerResult dataclass for intermediate analysis results,
+and utility methods for creating standardized Finding database objects.
+
+The base class provides:
+    - Abstract ``analyze()`` method that all analyzers implement
+    - ``create_finding()`` factory method for generating Finding objects
+      with deterministic IDs, severity-to-CVSS mapping, and optional
+      OWASP/CWE classification
+    - ``result_to_finding()`` converter from AnalyzerResult to Finding
+    - Finding deduplication via content-based hashing
+    - Integration with the known findings registry for enrichment
+
+Architecture:
+    Analyzer subclasses implement ``async analyze(app) -> list[Finding]``
+    and are registered with the scan orchestrator. The orchestrator runs
+    selected analyzers based on scan_type (static, dynamic, or full) and
+    collects all findings into the database.
+"""
 
 import hashlib
 import logging
@@ -17,7 +37,14 @@ _finding_registry = None
 
 
 def _get_finding_registry():
-    """Get the finding registry lazily."""
+    """Get the known findings registry instance via lazy initialization.
+
+    Uses lazy import to avoid circular dependencies between the
+    analyzer base module and the data/known_findings package.
+
+    Returns:
+        The singleton FindingRegistry instance.
+    """
     global _finding_registry
     if _finding_registry is None:
         from api.data.known_findings.registry import get_finding_registry
@@ -73,14 +100,40 @@ class AnalyzerResult:
 
 
 class BaseAnalyzer(ABC):
-    """Abstract base class for all analyzers."""
+    """Abstract base class for all security analyzers.
+
+    All static and dynamic analyzers inherit from this class and implement
+    the ``analyze()`` method. The base class provides standardized finding
+    creation, deduplication via canonical IDs, and integration with the
+    known findings registry for template-based finding generation.
+
+    Attributes:
+        name: Unique identifier for this analyzer, used in scan_type
+            routing and finding attribution.
+        platform: Target platform scope ("android", "ios", or
+            "cross-platform").
+    """
 
     name: str = "base"
     platform: str = "cross-platform"
 
     @abstractmethod
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze an app and return findings."""
+        """Analyze an application and return security findings.
+
+        All analyzer subclasses must implement this method. The method
+        should be idempotent and safe to run concurrently with other
+        analyzers on the same application.
+
+        Args:
+            app: The mobile application to analyze, with file_path
+                pointing to the APK or IPA archive.
+
+        Returns:
+            A list of Finding objects representing detected security
+            issues. May return an empty list if no issues are found
+            or if the analyzer does not apply to this app's platform.
+        """
         pass
 
     def _generate_canonical_id(
@@ -89,10 +142,21 @@ class BaseAnalyzer(ABC):
         title: str,
         category: str | None,
     ) -> str:
-        """Generate canonical ID for finding deduplication.
+        """Generate a canonical ID for finding deduplication.
 
-        Creates a stable identifier based on category, title, app, and platform
-        to enable merging duplicate findings from different tools.
+        Creates a stable identifier based on category, title, app_id,
+        and platform to enable merging duplicate findings from different
+        analysis tools. Normalizes the title by lowercasing and replacing
+        non-alphanumeric characters with underscores.
+
+        Args:
+            app: The mobile application being analyzed.
+            title: The finding title to normalize.
+            category: The finding category, or None for "unknown".
+
+        Returns:
+            A canonical ID string, or a SHA-256 hash prefix if the
+            resulting ID exceeds 200 characters.
         """
         # Normalize title: lowercase, replace non-alphanumeric with underscore
         normalized_title = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
@@ -221,10 +285,18 @@ class BaseAnalyzer(ABC):
         )
 
     def result_to_finding(self, app: MobileApp, result: AnalyzerResult) -> Finding:
-        """Convert an AnalyzerResult to a Finding object.
+        """Convert an AnalyzerResult dataclass to a Finding database object.
 
-        This provides a convenient way to convert the dataclass-based results
-        to database Finding objects.
+        Provides a convenient bridge for analyzers that use the
+        AnalyzerResult intermediate format to produce Finding objects
+        compatible with the database layer.
+
+        Args:
+            app: The mobile application being analyzed.
+            result: The AnalyzerResult to convert.
+
+        Returns:
+            A Finding object ready to be persisted to the database.
         """
         return self.create_finding(
             app=app,

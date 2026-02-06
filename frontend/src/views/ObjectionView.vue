@@ -190,9 +190,9 @@
           <TabPanel value="1" header="File Browser">
             <div class="file-browser">
               <div class="file-path-bar">
-                <Button icon="pi pi-arrow-up" class="p-button-sm p-button-text" @click="navigateUp" :disabled="!activeSession" />
+                <Button icon="pi pi-arrow-up" class="p-button-sm p-button-text" v-tooltip="'Navigate Up'" @click="navigateUp" :disabled="!activeSession" />
                 <InputText v-model="currentPath" @keyup.enter="navigateToPath" :disabled="!activeSession" />
-                <Button icon="pi pi-refresh" class="p-button-sm p-button-text" @click="refreshFiles" :disabled="!activeSession" :loading="loadingFiles" />
+                <Button icon="pi pi-refresh" class="p-button-sm p-button-text" v-tooltip="'Refresh Files'" @click="refreshFiles" :disabled="!activeSession" :loading="loadingFiles" />
               </div>
               <div class="file-list">
                 <div v-if="loadingFiles" class="loading-files">
@@ -296,6 +296,21 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * ObjectionView - Objection framework integration for runtime mobile app exploration.
+ *
+ * Features:
+ * - Session management with device and package selection
+ * - Interactive terminal with command input and color-coded output
+ * - Quick actions: disable SSL pinning, disable root detection, dump keychain/keystore, list modules
+ * - Platform-filtered command browser with searchable accordion categories
+ * - File browser with directory navigation, file viewing dialog
+ * - SQLite database explorer with query execution and results table
+ * - Keychain/Keystore data dump and display
+ *
+ * @requires objectionApi - session CRUD, command execution, file/SQL operations, quick actions
+ * @requires useDevicesStore - provides connected device list for session targeting
+ */
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useDevicesStore } from '@/stores/devices'
 import { objectionApi } from '@/services/api'

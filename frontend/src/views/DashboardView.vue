@@ -156,6 +156,20 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * DashboardView - Main dashboard providing a high-level overview of mobile security analysis.
+ *
+ * Features:
+ * - Severity summary cards (critical, high, medium, low counts)
+ * - Aggregate stats for total apps, scans, and findings
+ * - Recent scans table with type, status, and progress
+ * - Findings breakdown by category
+ * - OWASP MASVS compliance category overview
+ *
+ * @requires useFindingsStore - fetches findings summary and MASVS data
+ * @requires useScansStore - fetches recent scan list
+ * @requires useAppsStore - fetches total app count
+ */
 import { ref, onMounted } from 'vue'
 import { useFindingsStore } from '@/stores/findings'
 import { useScansStore } from '@/stores/scans'

@@ -18,6 +18,7 @@
           v-if="selectedApp"
           label="Generate Report"
           icon="pi pi-file-pdf"
+          v-tooltip.bottom="'Generate MASVS compliance report'"
           @click="generateReport"
         />
       </div>
@@ -129,6 +130,21 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * ComplianceView - OWASP MASVS compliance assessment and reporting dashboard.
+ *
+ * Features:
+ * - Per-app compliance selection dropdown
+ * - Circular progress indicator for overall compliance score
+ * - Category chip summary showing pass/partial/fail status
+ * - Expandable category cards with individual control status tags
+ * - Detailed category dialog showing control descriptions and linked findings
+ * - JSON compliance report generation and download
+ *
+ * @requires complianceApi - fetches MASVS overview, per-app compliance, and category details
+ * @requires exportsApi - generates downloadable compliance reports
+ * @requires useAppsStore - provides the application list for selection
+ */
 import { ref, computed, onMounted } from 'vue'
 import { useAppsStore } from '@/stores/apps'
 import { complianceApi, exportsApi } from '@/services/api'
@@ -156,6 +172,7 @@ const apps = computed(() => appsStore.apps)
 interface Control {
   id: string
   name: string
+  description: string
 }
 
 interface Category {
@@ -164,24 +181,7 @@ interface Category {
   controls: Control[]
 }
 
-function createCategory(id: string, name: string): Category {
-  const controls: Control[] = []
-  for (let i = 1; i <= 4; i++) {
-    controls.push({ id: `${id}-${i}`, name: `Control ${i}` })
-  }
-  return { id, name, controls }
-}
-
-const categories: Category[] = [
-  createCategory('MASVS-STORAGE', 'Data Storage'),
-  createCategory('MASVS-CRYPTO', 'Cryptography'),
-  createCategory('MASVS-AUTH', 'Authentication'),
-  createCategory('MASVS-NETWORK', 'Network Communication'),
-  createCategory('MASVS-PLATFORM', 'Platform Interaction'),
-  createCategory('MASVS-CODE', 'Code Quality'),
-  createCategory('MASVS-RESILIENCE', 'Resilience'),
-  createCategory('MASVS-PRIVACY', 'Privacy'),
-]
+const categories = ref<Category[]>([])
 
 const overallScore = computed(() => {
   if (!compliance.value) return 0
@@ -260,7 +260,7 @@ async function loadCompliance() {
 
 async function showCategoryDetails(categoryId: string) {
   if (!selectedApp.value) return
-  selectedCategory.value = categories.find((c) => c.id === categoryId)
+  selectedCategory.value = categories.value.find((c) => c.id === categoryId)
   try {
     const response = await complianceApi.getCategoryDetails(selectedApp.value, categoryId)
     categoryDetails.value = response.data
@@ -323,8 +323,27 @@ const CircularProgress = {
   },
 }
 
+async function loadMasvsCategories() {
+  try {
+    const response = await complianceApi.getMasvsOverview()
+    const data = response.data
+    categories.value = Object.entries(data.categories).map(([catId, catInfo]: [string, any]) => ({
+      id: catId,
+      name: catInfo.name,
+      controls: (catInfo.controls_detail || []).map((ctrl: any) => ({
+        id: ctrl.id,
+        name: ctrl.name,
+        description: ctrl.description,
+      })),
+    }))
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Error', detail: 'Failed to load MASVS categories', life: 3000 })
+  }
+}
+
 onMounted(() => {
   appsStore.fetchApps()
+  loadMasvsCategories()
 })
 </script>
 

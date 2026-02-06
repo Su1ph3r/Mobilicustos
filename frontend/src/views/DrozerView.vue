@@ -239,6 +239,20 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * DrozerView - Drozer security assessment console for dynamic Android testing.
+ *
+ * Features:
+ * - Session management targeting connected Android devices
+ * - Searchable module browser with categorized accordion layout
+ * - Module execution with configurable arguments
+ * - Quick actions: attack surface analysis, provider enumeration, SQL injection and path traversal tests
+ * - Results console with structured data display (activities, providers, vulnerabilities)
+ * - Drozer installation status indicator
+ *
+ * @requires drozerApi - session CRUD, module execution, quick action endpoints, and status check
+ * @requires useDevicesStore - provides connected Android device list
+ */
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useDevicesStore } from '@/stores/devices'
 import { drozerApi } from '@/services/api'

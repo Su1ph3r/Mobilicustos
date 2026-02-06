@@ -189,6 +189,26 @@ async def get_findings_summary(
     }
 
 
+@router.delete("/purge/{app_id}")
+async def purge_findings(app_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete ALL findings for a given app_id."""
+    result = await db.execute(
+        select(Finding).where(Finding.app_id == app_id)
+    )
+    findings = result.scalars().all()
+
+    if not findings:
+        raise HTTPException(status_code=404, detail="No findings found for this app")
+
+    deleted_count = len(findings)
+    for finding in findings:
+        await db.delete(finding)
+
+    await db.commit()
+
+    return {"message": f"Purged {deleted_count} findings", "deleted_count": deleted_count}
+
+
 @router.get("/{finding_id}", response_model=FindingResponse)
 async def get_finding(finding_id: str, db: AsyncSession = Depends(get_db)):
     """Get a finding by ID."""

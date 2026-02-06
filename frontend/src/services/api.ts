@@ -1,5 +1,10 @@
 import axios from 'axios'
 
+/**
+ * Axios instance configured with /api base URL, 30s timeout, and JSON content type.
+ * Includes request interceptor for Bearer token injection and response interceptor
+ * for 401 handling (token removal).
+ */
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -35,7 +40,7 @@ api.interceptors.response.use(
   }
 )
 
-// Apps API
+/** Apps API - CRUD operations for mobile application management (upload, list, get, delete, stats) */
 export const appsApi = {
   list: (params?: Record<string, any>) => api.get('/apps', { params }),
   get: (id: string) => api.get(`/apps/${id}`),
@@ -50,7 +55,7 @@ export const appsApi = {
   getStats: (id: string) => api.get(`/apps/${id}/stats`),
 }
 
-// Scans API
+/** Scans API - Create, list, cancel, delete scans with progress tracking and bulk operations */
 export const scansApi = {
   list: (params?: Record<string, any>) => api.get('/scans', { params }),
   get: (id: string) => api.get(`/scans/${id}`),
@@ -59,9 +64,11 @@ export const scansApi = {
   cancel: (id: string) => api.post(`/scans/${id}/cancel`),
   delete: (id: string) => api.delete(`/scans/${id}`),
   getProgress: (id: string) => api.get(`/scans/${id}/progress`),
+  purge: (appId: string) => api.delete(`/scans/purge/${appId}`),
+  bulkDelete: (scanIds: string[]) => api.post('/scans/bulk-delete', scanIds),
 }
 
-// Findings API
+/** Findings API - List, filter, update status, bulk operations, and purge security findings */
 export const findingsApi = {
   list: (params?: Record<string, any>) => api.get('/findings', { params }),
   get: (id: string) => api.get(`/findings/${id}`),
@@ -73,9 +80,10 @@ export const findingsApi = {
   getFilterOptions: () => api.get('/findings/filters/options'),
   delete: (id: string) => api.delete(`/findings/${id}`),
   bulkDelete: (ids: string[]) => api.post('/findings/bulk-delete', ids),
+  purge: (appId: string) => api.delete(`/findings/purge/${appId}`),
 }
 
-// Devices API
+/** Devices API - Device discovery, registration, connection, and Frida server management */
 export const devicesApi = {
   list: (params?: Record<string, any>) => api.get('/devices', { params }),
   get: (id: string) => api.get(`/devices/${id}`),
@@ -87,7 +95,7 @@ export const devicesApi = {
   delete: (id: string) => api.delete(`/devices/${id}`),
 }
 
-// Frida API
+/** Frida API - Script CRUD, injection, session management, and script categories */
 export const fridaApi = {
   listScripts: (params?: Record<string, any>) => api.get('/frida/scripts', { params }),
   getScript: (id: string) => api.get(`/frida/scripts/${id}`),
@@ -101,7 +109,7 @@ export const fridaApi = {
   getCategories: () => api.get('/frida/scripts/categories'),
 }
 
-// Bypass API
+/** Bypass API - Analyze protections, attempt individual/auto bypass, and list results */
 export const bypassApi = {
   listResults: (params?: Record<string, any>) => api.get('/bypass/results', { params }),
   analyzeProtections: (appId: string) => api.post('/bypass/analyze', null, { params: { app_id: appId } }),
@@ -113,7 +121,7 @@ export const bypassApi = {
     api.get('/bypass/scripts/recommended', { params: { app_id: appId, detection_type: detectionType } }),
 }
 
-// ML Models API
+/** ML Models API - Extract, analyze, and inspect machine learning models embedded in apps */
 export const mlModelsApi = {
   list: (params?: Record<string, any>) => api.get('/ml-models', { params }),
   get: (id: string) => api.get(`/ml-models/${id}`),
@@ -123,7 +131,7 @@ export const mlModelsApi = {
   getFormats: () => api.get('/ml-models/formats'),
 }
 
-// Secrets API
+/** Secrets API - List, validate, and summarize detected secrets with type/provider metadata */
 export const secretsApi = {
   list: (params?: Record<string, any>) => api.get('/secrets', { params }),
   get: (id: string) => api.get(`/secrets/${id}`),
@@ -133,7 +141,7 @@ export const secretsApi = {
   getProviders: () => api.get('/secrets/providers'),
 }
 
-// Attack Paths API
+/** Attack Paths API - List, generate, get details, graph, and findings for attack chains */
 export const attackPathsApi = {
   list: (params?: Record<string, any>) => api.get('/attack-paths', { params }),
   get: (id: string) => api.get(`/attack-paths/${id}`),
@@ -143,7 +151,7 @@ export const attackPathsApi = {
   delete: (id: string) => api.delete(`/attack-paths/${id}`),
 }
 
-// Compliance API
+/** Compliance API - OWASP MASVS overview, per-app compliance, category details, and report generation */
 export const complianceApi = {
   getMasvsOverview: () => api.get('/compliance/masvs'),
   getAppCompliance: (appId: string) => api.get(`/compliance/masvs/${appId}`),
@@ -152,7 +160,7 @@ export const complianceApi = {
   generateReport: (appId: string) => api.get(`/compliance/report/${appId}`),
 }
 
-// Exports API
+/** Exports API - Download findings and reports in multiple formats (CSV, JSON, HTML, PDF, SARIF) */
 export const exportsApi = {
   exportFindings: (appId: string, format: string, params?: Record<string, any>) =>
     api.get(`/exports/findings/${appId}`, {
@@ -166,7 +174,7 @@ export const exportsApi = {
     }),
 }
 
-// Drozer API
+/** Drozer API - Session management, module execution, and quick security assessment actions for Android */
 export const drozerApi = {
   getStatus: () => api.get('/drozer/status'),
   listModules: () => api.get('/drozer/modules'),
@@ -190,7 +198,7 @@ export const drozerApi = {
     api.post('/drozer/quick/test-traversal', null, { params: { device_id: deviceId, package_name: packageName } }),
 }
 
-// Objection API
+/** Objection API - Session management, command execution, file/SQL operations, and quick runtime actions */
 export const objectionApi = {
   getStatus: () => api.get('/objection/status'),
   listCommands: (platform?: string) => api.get('/objection/commands', { params: { platform } }),
@@ -223,7 +231,7 @@ export const objectionApi = {
     api.post('/objection/quick/list-modules', null, { params: { device_id: deviceId, package_name: packageName } }),
 }
 
-// Scheduled Scans API
+/** Scheduled Scans API - CRUD, trigger, pause/resume, history, and cron validation for scheduled scans */
 export const scheduledScansApi = {
   list: (params?: Record<string, any>) => api.get('/scheduled-scans', { params }).then(r => r.data),
   get: (id: string) => api.get(`/scheduled-scans/${id}`).then(r => r.data),
@@ -237,7 +245,7 @@ export const scheduledScansApi = {
   validateCron: (expression: string) => api.post('/scheduled-scans/validate-cron', { cron_expression: expression }).then(r => r.data),
 }
 
-// Webhooks API
+/** Webhooks API - CRUD, test, pause/resume, secret regeneration, events, and delivery history */
 export const webhooksApi = {
   list: (params?: Record<string, any>) => api.get('/webhooks', { params }).then(r => r.data),
   get: (id: string) => api.get(`/webhooks/${id}`).then(r => r.data),
@@ -252,7 +260,7 @@ export const webhooksApi = {
   getDeliveries: (id: string) => api.get(`/webhooks/${id}/deliveries`).then(r => r.data),
 }
 
-// Burp Suite API
+/** Burp Suite API - Connection management, scan control, proxy history, and issue import/listing */
 export const burpApi = {
   // Connections
   listConnections: (params?: Record<string, any>) => api.get('/burp/connections', { params }).then(r => r.data),
@@ -281,6 +289,21 @@ export const burpApi = {
   // Issues
   listIssues: (params?: Record<string, any>) => api.get('/burp/issues', { params }).then(r => r.data),
   getIssue: (id: string) => api.get(`/burp/issues/${id}`).then(r => r.data),
+}
+
+/** API Endpoints API - List discovered endpoints, export in multiple formats, and probe hidden paths */
+export const apiEndpointsApi = {
+  list: (appId: string) => api.get(`/api-endpoints/${appId}`),
+  exportEndpoints: (appId: string, format: string) =>
+    api.get(`/api-endpoints/${appId}/export`, { params: { format }, responseType: 'blob' }),
+  probe: (appId: string, baseUrls: string[]) =>
+    api.post(`/api-endpoints/${appId}/probe`, { base_urls: baseUrls }),
+}
+
+/** Settings API - Retrieve system configuration and service connection status */
+export const settingsApi = {
+  getSettings: () => api.get('/settings'),
+  getStatus: () => api.get('/settings/status'),
 }
 
 export default api

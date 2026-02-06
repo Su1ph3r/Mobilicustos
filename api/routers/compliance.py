@@ -89,13 +89,50 @@ MASVS_CATEGORIES = {
     },
 }
 
+# MASVS v2 Control IDs with names and descriptions
+MASVS_CONTROLS = {
+    "MASVS-STORAGE-1": {"name": "Secure Data Storage", "description": "The app securely stores sensitive data."},
+    "MASVS-STORAGE-2": {"name": "Data Leakage Prevention", "description": "The app prevents leakage of sensitive data."},
+    "MASVS-CRYPTO-1": {"name": "Strong Cryptography", "description": "The app employs current strong cryptography and uses it according to industry best practices."},
+    "MASVS-CRYPTO-2": {"name": "Key Management", "description": "The app performs key management according to industry best practices."},
+    "MASVS-AUTH-1": {"name": "Secure Authentication", "description": "The app uses secure authentication and authorization protocols."},
+    "MASVS-AUTH-2": {"name": "Session Management", "description": "The app performs proper session management."},
+    "MASVS-AUTH-3": {"name": "Biometric Authentication", "description": "The app uses biometric authentication securely where available."},
+    "MASVS-NETWORK-1": {"name": "Secure Connections", "description": "The app secures all network traffic according to current best practices."},
+    "MASVS-NETWORK-2": {"name": "TLS Settings", "description": "The app verifies the TLS settings of the underlying platform."},
+    "MASVS-PLATFORM-1": {"name": "Platform Permissions", "description": "The app only requests the minimum set of permissions necessary."},
+    "MASVS-PLATFORM-2": {"name": "Input Validation", "description": "All inputs from external sources and the user are validated."},
+    "MASVS-PLATFORM-3": {"name": "Secure IPC", "description": "The app secures all inter-process communication."},
+    "MASVS-CODE-1": {"name": "Verified Signing", "description": "The app is signed and provisioned with a valid certificate."},
+    "MASVS-CODE-2": {"name": "Debug Prevention", "description": "The app has been built in release mode with appropriate settings."},
+    "MASVS-CODE-3": {"name": "Exception Handling", "description": "The app catches and handles exceptions correctly."},
+    "MASVS-CODE-4": {"name": "Secure Dependencies", "description": "The app uses up-to-date libraries with no known vulnerabilities."},
+    "MASVS-RESILIENCE-1": {"name": "Anti-Tampering", "description": "The app detects and responds to tampering."},
+    "MASVS-RESILIENCE-2": {"name": "Anti-Debugging", "description": "The app detects and responds to debugging."},
+    "MASVS-RESILIENCE-3": {"name": "Obfuscation", "description": "The app implements code obfuscation and other protections."},
+    "MASVS-RESILIENCE-4": {"name": "Device Integrity", "description": "The app detects rooted/jailbroken devices and responds."},
+    "MASVS-PRIVACY-1": {"name": "Data Minimization", "description": "The app minimizes access to sensitive data and resources."},
+    "MASVS-PRIVACY-2": {"name": "Consent Management", "description": "The app handles user consent for data collection."},
+    "MASVS-PRIVACY-3": {"name": "Tracking Prevention", "description": "The app minimizes tracking of user activity."},
+    "MASVS-PRIVACY-4": {"name": "Notification Transparency", "description": "The app provides clear notifications about data collection."},
+}
+
 
 @router.get("/masvs")
 async def get_masvs_overview():
     """Get OWASP MASVS categories overview."""
+    enriched = {}
+    for cat_id, cat_info in MASVS_CATEGORIES.items():
+        enriched[cat_id] = {
+            **cat_info,
+            "controls_detail": [
+                {"id": ctrl_id, **MASVS_CONTROLS.get(ctrl_id, {"name": ctrl_id, "description": ""})}
+                for ctrl_id in cat_info["controls"]
+            ],
+        }
     return {
         "version": "2.0",
-        "categories": MASVS_CATEGORIES,
+        "categories": enriched,
     }
 
 

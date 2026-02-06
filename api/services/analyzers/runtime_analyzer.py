@@ -1,4 +1,26 @@
-"""Runtime analyzer — Frida-based dynamic analysis of running apps."""
+"""Runtime analyzer -- Frida-based dynamic analysis of running applications.
+
+Performs dynamic security analysis by injecting a comprehensive Frida
+JavaScript hook script into the target application at runtime. Hooks
+security-relevant Java/ObjC APIs to detect insecure behavior that cannot
+be identified through static analysis alone.
+
+Dynamic checks include:
+    - Insecure data storage (SharedPreferences, NSUserDefaults, clipboard)
+    - Cryptographic API misuse at runtime
+    - Certificate validation bypasses
+    - Sensitive data in log output
+    - Runtime permission handling
+
+Note:
+    This analyzer requires a connected device with frida-server running
+    and is only executed during ``scan_type="dynamic"`` or ``scan_type="full"``
+    scans. Flutter apps typically do not trigger Java-level hooks as they
+    use Dart/native networking and crypto.
+
+OWASP references:
+    - MASVS-STORAGE, MASVS-CRYPTO, MASVS-NETWORK
+"""
 
 import asyncio
 import logging
@@ -166,7 +188,303 @@ Java.perform(function() {
         };
     } catch(e) {}
 
-    send({type: 'hooks_ready', count: 10});
+    // ---- Content Provider Monitoring ----
+    // 11. ContentResolver.query() — full monitoring with projection and selection
+    try {
+        var ContentResolver = Java.use('android.content.ContentResolver');
+        ContentResolver.query.overload('android.net.Uri', '[Ljava.lang.String;', 'java.lang.String', '[Ljava.lang.String;', 'java.lang.String').implementation = function(uri, projection, selection, selectionArgs, sortOrder) {
+            var uriStr = uri ? uri.toString() : 'null';
+            var projStr = '';
+            try {
+                if (projection !== null) {
+                    var projArr = [];
+                    for (var i = 0; i < projection.length; i++) { projArr.push(projection[i]); }
+                    projStr = projArr.join(', ');
+                }
+            } catch(e2) {}
+            var selStr = selection ? selection.toString() : 'null';
+            console.log('[*] ContentResolver.query() URI: ' + uriStr);
+            reportFinding('Content Provider', 'ContentResolver.query() invoked at runtime',
+                'info', 'URI: ' + uriStr + ' | projection: [' + projStr + '] | selection: ' + selStr);
+            return this.query(uri, projection, selection, selectionArgs, sortOrder);
+        };
+    } catch(e) { console.log('[-] Failed to hook ContentResolver.query: ' + e); }
+
+    // 12. ContentResolver.insert()
+    try {
+        var ContentResolver = Java.use('android.content.ContentResolver');
+        ContentResolver.insert.overload('android.net.Uri', 'android.content.ContentValues').implementation = function(uri, values) {
+            var uriStr = uri ? uri.toString() : 'null';
+            console.log('[*] ContentResolver.insert() URI: ' + uriStr);
+            reportFinding('Content Provider', 'ContentResolver.insert() invoked at runtime',
+                'info', 'URI: ' + uriStr);
+            return this.insert(uri, values);
+        };
+    } catch(e) { console.log('[-] Failed to hook ContentResolver.insert: ' + e); }
+
+    // 13. ContentResolver.update()
+    try {
+        var ContentResolver = Java.use('android.content.ContentResolver');
+        ContentResolver.update.overload('android.net.Uri', 'android.content.ContentValues', 'java.lang.String', '[Ljava.lang.String;').implementation = function(uri, values, where, selArgs) {
+            var uriStr = uri ? uri.toString() : 'null';
+            var whereStr = where ? where.toString() : 'null';
+            console.log('[*] ContentResolver.update() URI: ' + uriStr);
+            reportFinding('Content Provider', 'ContentResolver.update() invoked at runtime',
+                'medium', 'URI: ' + uriStr + ' | where: ' + whereStr);
+            return this.update(uri, values, where, selArgs);
+        };
+    } catch(e) { console.log('[-] Failed to hook ContentResolver.update: ' + e); }
+
+    // 14. ContentResolver.delete()
+    try {
+        var ContentResolver = Java.use('android.content.ContentResolver');
+        ContentResolver['delete'].overload('android.net.Uri', 'java.lang.String', '[Ljava.lang.String;').implementation = function(uri, where, selArgs) {
+            var uriStr = uri ? uri.toString() : 'null';
+            var whereStr = where ? where.toString() : 'null';
+            console.log('[+] ContentResolver.delete() URI: ' + uriStr);
+            reportFinding('Content Provider', 'ContentResolver.delete() invoked at runtime',
+                'medium', 'URI: ' + uriStr + ' | where: ' + whereStr);
+            return this['delete'](uri, where, selArgs);
+        };
+    } catch(e) { console.log('[-] Failed to hook ContentResolver.delete: ' + e); }
+
+    // ---- Intent Monitoring ----
+    // 15. Activity.startActivity()
+    try {
+        var Activity = Java.use('android.app.Activity');
+        Activity.startActivity.overload('android.content.Intent').implementation = function(intent) {
+            var action = intent.getAction() || 'null';
+            var dataUri = 'null';
+            try { var d = intent.getData(); if (d) dataUri = d.toString(); } catch(e2) {}
+            var component = 'null';
+            try { var c = intent.getComponent(); if (c) component = c.flattenToString(); } catch(e2) {}
+            var extras = 'null';
+            try { var b = intent.getExtras(); if (b) extras = b.toString(); } catch(e2) {}
+            console.log('[*] Activity.startActivity() action: ' + action + ' component: ' + component);
+            reportFinding('Intent', 'Activity.startActivity() called at runtime',
+                'info', 'action: ' + action + ' | data: ' + dataUri + ' | component: ' + component + ' | extras: ' + extras);
+            return this.startActivity(intent);
+        };
+    } catch(e) { console.log('[-] Failed to hook Activity.startActivity: ' + e); }
+
+    // 16. Activity.startActivityForResult()
+    try {
+        var Activity = Java.use('android.app.Activity');
+        Activity.startActivityForResult.overload('android.content.Intent', 'int').implementation = function(intent, requestCode) {
+            var action = intent.getAction() || 'null';
+            var dataUri = 'null';
+            try { var d = intent.getData(); if (d) dataUri = d.toString(); } catch(e2) {}
+            var component = 'null';
+            try { var c = intent.getComponent(); if (c) component = c.flattenToString(); } catch(e2) {}
+            console.log('[*] Activity.startActivityForResult() action: ' + action + ' requestCode: ' + requestCode);
+            reportFinding('Intent', 'Activity.startActivityForResult() called at runtime',
+                'info', 'action: ' + action + ' | data: ' + dataUri + ' | component: ' + component + ' | requestCode: ' + requestCode);
+            return this.startActivityForResult(intent, requestCode);
+        };
+    } catch(e) { console.log('[-] Failed to hook Activity.startActivityForResult: ' + e); }
+
+    // 17. Context.sendBroadcast()
+    try {
+        var ContextWrapper = Java.use('android.content.ContextWrapper');
+        ContextWrapper.sendBroadcast.overload('android.content.Intent').implementation = function(intent) {
+            var action = intent.getAction() || 'null';
+            var dataUri = 'null';
+            try { var d = intent.getData(); if (d) dataUri = d.toString(); } catch(e2) {}
+            var extras = 'null';
+            try { var b = intent.getExtras(); if (b) extras = b.toString(); } catch(e2) {}
+            console.log('[+] Context.sendBroadcast() action: ' + action);
+            reportFinding('Intent', 'Implicit broadcast sent at runtime',
+                'medium', 'sendBroadcast() action: ' + action + ' | data: ' + dataUri + ' | extras: ' + extras + ' - may expose data to other apps');
+            return this.sendBroadcast(intent);
+        };
+    } catch(e) { console.log('[-] Failed to hook Context.sendBroadcast: ' + e); }
+
+    // 18. Context.startService()
+    try {
+        var ContextWrapper = Java.use('android.content.ContextWrapper');
+        ContextWrapper.startService.overload('android.content.Intent').implementation = function(intent) {
+            var action = intent.getAction() || 'null';
+            var component = 'null';
+            try { var c = intent.getComponent(); if (c) component = c.flattenToString(); } catch(e2) {}
+            var extras = 'null';
+            try { var b = intent.getExtras(); if (b) extras = b.toString(); } catch(e2) {}
+            console.log('[*] Context.startService() action: ' + action + ' component: ' + component);
+            reportFinding('Intent', 'Service started at runtime',
+                'info', 'startService() action: ' + action + ' | component: ' + component + ' | extras: ' + extras);
+            return this.startService(intent);
+        };
+    } catch(e) { console.log('[-] Failed to hook Context.startService: ' + e); }
+
+    // ---- Extended WebView Hooks ----
+    // 19. WebView.loadUrl()
+    try {
+        var WebView = Java.use('android.webkit.WebView');
+        WebView.loadUrl.overload('java.lang.String').implementation = function(url) {
+            console.log('[*] WebView.loadUrl(): ' + url);
+            var severity = 'info';
+            if (url && url.toString().startsWith('http://')) {
+                severity = 'high';
+            }
+            if (url && url.toString().startsWith('javascript:')) {
+                severity = 'medium';
+            }
+            reportFinding('WebView', 'WebView.loadUrl() called at runtime',
+                severity, 'URL: ' + (url ? url.toString().substring(0, 500) : 'null'));
+            return this.loadUrl(url);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebView.loadUrl: ' + e); }
+
+    // 20. WebView.loadData()
+    try {
+        var WebView = Java.use('android.webkit.WebView');
+        WebView.loadData.overload('java.lang.String', 'java.lang.String', 'java.lang.String').implementation = function(data, mimeType, encoding) {
+            console.log('[*] WebView.loadData() mimeType: ' + mimeType);
+            reportFinding('WebView', 'WebView.loadData() called at runtime',
+                'info', 'mimeType: ' + mimeType + ' | encoding: ' + encoding + ' | data length: ' + (data ? data.length : 0));
+            return this.loadData(data, mimeType, encoding);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebView.loadData: ' + e); }
+
+    // 21. WebView.loadDataWithBaseURL()
+    try {
+        var WebView = Java.use('android.webkit.WebView');
+        WebView.loadDataWithBaseURL.overload('java.lang.String', 'java.lang.String', 'java.lang.String', 'java.lang.String', 'java.lang.String').implementation = function(baseUrl, data, mimeType, encoding, historyUrl) {
+            console.log('[*] WebView.loadDataWithBaseURL() baseUrl: ' + baseUrl);
+            reportFinding('WebView', 'WebView.loadDataWithBaseURL() called at runtime',
+                'info', 'baseUrl: ' + (baseUrl || 'null') + ' | mimeType: ' + mimeType + ' | historyUrl: ' + (historyUrl || 'null') + ' | data length: ' + (data ? data.length : 0));
+            return this.loadDataWithBaseURL(baseUrl, data, mimeType, encoding, historyUrl);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebView.loadDataWithBaseURL: ' + e); }
+
+    // 22. WebView.evaluateJavascript()
+    try {
+        var WebView = Java.use('android.webkit.WebView');
+        WebView.evaluateJavascript.implementation = function(script, callback) {
+            console.log('[+] WebView.evaluateJavascript() script length: ' + (script ? script.length : 0));
+            reportFinding('WebView', 'JavaScript evaluated in WebView at runtime',
+                'medium', 'evaluateJavascript() called with script length: ' + (script ? script.length : 0) + ' | snippet: ' + (script ? script.toString().substring(0, 200) : 'null'));
+            return this.evaluateJavascript(script, callback);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebView.evaluateJavascript: ' + e); }
+
+    // 23. WebSettings.setJavaScriptEnabled()
+    try {
+        var WebSettings = Java.use('android.webkit.WebSettings');
+        WebSettings.setJavaScriptEnabled.implementation = function(flag) {
+            console.log('[+] WebSettings.setJavaScriptEnabled(' + flag + ')');
+            if (flag) {
+                reportFinding('WebView', 'JavaScript enabled in WebView',
+                    'medium', 'WebSettings.setJavaScriptEnabled(true) - enables JavaScript execution in WebView');
+            }
+            return this.setJavaScriptEnabled(flag);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebSettings.setJavaScriptEnabled: ' + e); }
+
+    // 24. WebView.addJavascriptInterface() — enhanced version (supplements hook #9)
+    // Note: Hook #9 already covers this; this adds more detail logging
+    try {
+        var WebView = Java.use('android.webkit.WebView');
+        WebView.addJavascriptInterface.implementation = function(obj, name) {
+            var objClass = obj ? obj.getClass().getName() : 'null';
+            console.log('[+] WebView.addJavascriptInterface() name: "' + name + '" class: ' + objClass);
+            reportFinding('WebView', 'JavaScript interface exposed in WebView',
+                'high', 'WebView.addJavascriptInterface() - interface name: "' + name + '" | backing class: ' + objClass);
+            return this.addJavascriptInterface(obj, name);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebView.addJavascriptInterface (enhanced): ' + e); }
+
+    // ---- Screenshot Protection ----
+    // 25. Window.setFlags() — detect FLAG_SECURE (0x2000)
+    try {
+        var screenshotProtected = false;
+        var Window = Java.use('android.view.Window');
+        Window.setFlags.implementation = function(flags, mask) {
+            var FLAG_SECURE = 0x2000;
+            if ((flags & FLAG_SECURE) !== 0) {
+                screenshotProtected = true;
+                console.log('[+] Window.setFlags() FLAG_SECURE is SET - screenshot protection enabled');
+                reportFinding('Screenshot Protection', 'Screenshot protection enabled (FLAG_SECURE)',
+                    'info', 'Window.setFlags() called with FLAG_SECURE (0x2000) - app protects against screenshots');
+            }
+            return this.setFlags(flags, mask);
+        };
+
+        // Also check addFlags for FLAG_SECURE
+        Window.addFlags.implementation = function(flags) {
+            var FLAG_SECURE = 0x2000;
+            if ((flags & FLAG_SECURE) !== 0) {
+                screenshotProtected = true;
+                console.log('[+] Window.addFlags() FLAG_SECURE is SET - screenshot protection enabled');
+                reportFinding('Screenshot Protection', 'Screenshot protection enabled via addFlags (FLAG_SECURE)',
+                    'info', 'Window.addFlags() called with FLAG_SECURE (0x2000) - app protects against screenshots');
+            }
+            return this.addFlags(flags);
+        };
+
+        // Report after observation period if no FLAG_SECURE was detected
+        setTimeout(function() {
+            if (!screenshotProtected) {
+                console.log('[+] FLAG_SECURE not detected - app may be vulnerable to screenshot capture');
+                reportFinding('Screenshot Protection', 'No screenshot protection detected (FLAG_SECURE missing)',
+                    'medium', 'Window.setFlags()/addFlags() never set FLAG_SECURE (0x2000) - app content may be captured via screenshots or screen recording');
+            }
+        }, 20000);
+    } catch(e) { console.log('[-] Failed to hook Window.setFlags: ' + e); }
+
+    // ---- Keyboard Cache Monitoring ----
+    // 26. EditText input type checks for password fields missing textNoSuggestions
+    try {
+        var EditText = Java.use('android.widget.EditText');
+        EditText.setInputType.implementation = function(type) {
+            // Input type flags
+            var TYPE_CLASS_TEXT = 0x00000001;
+            var TYPE_TEXT_VARIATION_PASSWORD = 0x00000080;
+            var TYPE_TEXT_VARIATION_VISIBLE_PASSWORD = 0x00000090;
+            var TYPE_TEXT_VARIATION_WEB_PASSWORD = 0x000000E0;
+            var TYPE_TEXT_FLAG_NO_SUGGESTIONS = 0x00080000;
+            var TYPE_NUMBER_VARIATION_PASSWORD = 0x00000010;
+
+            var isPassword = ((type & TYPE_TEXT_VARIATION_PASSWORD) === TYPE_TEXT_VARIATION_PASSWORD) ||
+                             ((type & TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) === TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) ||
+                             ((type & TYPE_TEXT_VARIATION_WEB_PASSWORD) === TYPE_TEXT_VARIATION_WEB_PASSWORD) ||
+                             ((type & TYPE_NUMBER_VARIATION_PASSWORD) === TYPE_NUMBER_VARIATION_PASSWORD);
+
+            var hasNoSuggestions = (type & TYPE_TEXT_FLAG_NO_SUGGESTIONS) !== 0;
+
+            if (isPassword) {
+                console.log('[*] EditText.setInputType() password field detected, inputType=0x' + type.toString(16));
+                if (!hasNoSuggestions) {
+                    reportFinding('Keyboard Cache', 'Password field may allow keyboard cache/suggestions',
+                        'medium', 'EditText.setInputType(0x' + type.toString(16) + ') - password field without TYPE_TEXT_FLAG_NO_SUGGESTIONS (0x00080000). Keyboard may cache input.');
+                } else {
+                    reportFinding('Keyboard Cache', 'Password field correctly disables suggestions',
+                        'info', 'EditText.setInputType(0x' + type.toString(16) + ') - password field with TYPE_TEXT_FLAG_NO_SUGGESTIONS set.');
+                }
+            }
+            return this.setInputType(type);
+        };
+    } catch(e) { console.log('[-] Failed to hook EditText.setInputType: ' + e); }
+
+    // 27. TextView.setInputType() — covers broader cases since EditText extends TextView
+    try {
+        var TextView = Java.use('android.widget.TextView');
+        TextView.setInputType.implementation = function(type) {
+            var TYPE_TEXT_VARIATION_PASSWORD = 0x00000080;
+            var TYPE_TEXT_FLAG_NO_SUGGESTIONS = 0x00080000;
+
+            if ((type & TYPE_TEXT_VARIATION_PASSWORD) === TYPE_TEXT_VARIATION_PASSWORD) {
+                var hasNoSuggestions = (type & TYPE_TEXT_FLAG_NO_SUGGESTIONS) !== 0;
+                if (!hasNoSuggestions) {
+                    console.log('[+] TextView.setInputType() password without NO_SUGGESTIONS, inputType=0x' + type.toString(16));
+                    reportFinding('Keyboard Cache', 'TextView password field may allow keyboard suggestions',
+                        'medium', 'TextView.setInputType(0x' + type.toString(16) + ') - password field without TYPE_TEXT_FLAG_NO_SUGGESTIONS flag');
+                }
+            }
+            return this.setInputType(type);
+        };
+    } catch(e) { console.log('[-] Failed to hook TextView.setInputType: ' + e); }
+
+    send({type: 'hooks_ready', count: 27});
 });
 
 setTimeout(function() {
@@ -266,7 +584,8 @@ class RuntimeAnalyzer(BaseAnalyzer):
                     description=(
                         "Frida-based runtime instrumentation was performed on the running application. "
                         "Hooks were placed on root detection, SSL pinning, cryptographic APIs, "
-                        "clipboard access, logging, WebView, and SharedPreferences. "
+                        "clipboard access, logging, WebView, SharedPreferences, content providers, "
+                        "intents, screenshot protection (FLAG_SECURE), and keyboard cache. "
                         "No security issues were triggered during the observation window."
                     ),
                     impact="No impact - informational result.",
@@ -363,6 +682,26 @@ class RuntimeAnalyzer(BaseAnalyzer):
                 "cwe_id": "CWE-922", "owasp": "MASVS-STORAGE",
                 "impact": "World-readable SharedPreferences expose data to all apps on the device.",
                 "remediation": "Use MODE_PRIVATE for SharedPreferences. Use EncryptedSharedPreferences for sensitive data.",
+            },
+            "Content Provider": {
+                "cwe_id": "CWE-200", "owasp": "MASVS-PLATFORM",
+                "impact": "Content provider operations may expose or modify sensitive data accessible by other apps.",
+                "remediation": "Restrict content provider access with proper permissions. Use android:exported=false for internal providers.",
+            },
+            "Intent": {
+                "cwe_id": "CWE-927", "owasp": "MASVS-PLATFORM",
+                "impact": "Intent-based communication may expose sensitive data or trigger unintended actions in other apps.",
+                "remediation": "Use explicit intents for sensitive operations. Validate intent data. Use LocalBroadcastManager for internal broadcasts.",
+            },
+            "Screenshot Protection": {
+                "cwe_id": "CWE-200", "owasp": "MASVS-PLATFORM",
+                "impact": "Without FLAG_SECURE, sensitive screens can be captured via screenshots or screen recording.",
+                "remediation": "Set WindowManager.LayoutParams.FLAG_SECURE on activities displaying sensitive data.",
+            },
+            "Keyboard Cache": {
+                "cwe_id": "CWE-200", "owasp": "MASVS-STORAGE",
+                "impact": "Keyboard cache/suggestions on password fields may store sensitive input in plaintext on disk.",
+                "remediation": "Set TYPE_TEXT_FLAG_NO_SUGGESTIONS and appropriate password inputType on sensitive EditText fields.",
             },
         }
 

@@ -1,30 +1,76 @@
-"""
-Secure Storage Analyzer
+"""Secure storage analyzer for mobile application data protection.
 
-Analyzes mobile apps for secure storage implementation and identifies
-insecure data storage vulnerabilities including:
-- SharedPreferences/NSUserDefaults misuse
-- SQLite database security
-- Keychain/Keystore usage
-- File storage permissions
-- Backup configurations
+Performs static analysis of mobile application archives to detect insecure
+data storage practices that could expose sensitive user information to
+unauthorized access via device compromise, backup extraction, or
+inter-application data access.
+
+Security checks performed:
+    - **SharedPreferences/NSUserDefaults Misuse**: Detects sensitive data
+      (passwords, tokens, credentials) stored in unencrypted platform
+      preferences, and insecure file modes (MODE_WORLD_READABLE/WRITABLE).
+    - **SQLite Database Security**: Identifies world-readable/writable
+      databases, unencrypted databases containing sensitive tables, and
+      database files bundled in the application package.
+    - **Keychain/Keystore Usage**: Verifies presence of Android KeyStore
+      or iOS Keychain APIs when sensitive data storage is detected;
+      flags missing secure storage implementation.
+    - **File Storage Permissions**: Detects use of external storage for
+      sensitive data and insecure file permission modes.
+    - **Backup Configuration**: Checks for android:allowBackup and
+      absence of fullBackupContent or dataExtractionRules.
+    - **Encrypted Storage Detection**: Recognizes positive security
+      patterns including EncryptedSharedPreferences, EncryptedFile,
+      SQLCipher, and encrypted Realm databases.
+
+OWASP references:
+    - MASVS-STORAGE: Data Storage and Privacy
+    - MASVS-STORAGE-1, MASVS-STORAGE-2
+    - OWASP Mobile Top 10 M2: Insecure Data Storage
+    - CWE-312: Cleartext Storage of Sensitive Information
+    - CWE-311: Missing Encryption of Sensitive Data
+    - CWE-922: Insecure Storage of Sensitive Information
+    - CWE-276: Incorrect Default Permissions
+    - CWE-530: Exposure of Backup File to an Unauthorized Control Sphere
+    - CWE-732: Incorrect Permission Assignment for Critical Resource
 """
 
+import os
 import re
 import logging
 from typing import Optional
-from uuid import uuid4
 
 from api.models.database import MobileApp, Finding
+from api.services.analyzers.base_analyzer import BaseAnalyzer
 
 logger = logging.getLogger(__name__)
 
 
-class SecureStorageAnalyzer:
-    """Analyzes secure storage implementation in mobile apps."""
+class SecureStorageAnalyzer(BaseAnalyzer):
+    """Analyzes secure storage implementation in mobile applications.
 
-    ANALYZER_NAME = "secure_storage_analyzer"
-    ANALYZER_VERSION = "1.0.0"
+    Extracts the application archive and scans decompiled source code
+    for data storage anti-patterns including insecure SharedPreferences
+    modes, sensitive data in unencrypted preferences, missing KeyStore/
+    Keychain usage, world-readable databases, external storage writes,
+    and backup configuration issues.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform (defaults to "android").
+        ANDROID_SHARED_PREFS_PATTERNS: Regex patterns for detecting
+            SharedPreferences usage.
+        INSECURE_MODES: Patterns for deprecated world-readable/writable
+            file modes.
+        SENSITIVE_PREF_KEYS: Patterns for sensitive data in preferences.
+        IOS_USERDEFAULTS_PATTERNS: Patterns for NSUserDefaults usage.
+        IOS_KEYCHAIN_PATTERNS: Positive patterns indicating Keychain usage.
+        ANDROID_KEYSTORE_PATTERNS: Positive patterns indicating KeyStore usage.
+        ENCRYPTED_STORAGE_PATTERNS: Positive patterns for encrypted storage.
+    """
+
+    name = "secure_storage_analyzer"
+    platform = "android"
 
     # Android SharedPreferences patterns
     ANDROID_SHARED_PREFS_PATTERNS = [
@@ -116,20 +162,33 @@ class SecureStorageAnalyzer:
         (r'Realm\.Configuration.*encryptionKey', "Encrypted Realm database (good)"),
     ]
 
-    async def analyze(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """
-        Analyze app for secure storage vulnerabilities.
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze the application for secure storage vulnerabilities.
+
+        Extracts the archive, runs platform-specific storage analysis,
+        then performs cross-platform database and file storage checks.
 
         Args:
-            app: The mobile app being analyzed
-            extracted_path: Path to extracted app contents
+            app: The mobile application to analyze.
 
         Returns:
-            List of security findings
+            A list of Finding objects for insecure storage practices.
         """
-        findings = []
+        if not app.file_path:
+            return []
 
+        import shutil
+        import tempfile
+        import zipfile
+
+        extracted_path = None
         try:
+            extracted_path = tempfile.mkdtemp(prefix="secure_storage_")
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
+
+            findings = []
+
             if app.platform == "android":
                 findings.extend(await self._analyze_android_storage(app, extracted_path))
             elif app.platform == "ios":
@@ -140,18 +199,33 @@ class SecureStorageAnalyzer:
             findings.extend(await self._analyze_file_storage(app, extracted_path))
 
             logger.info(f"SecureStorageAnalyzer found {len(findings)} issues in {app.app_id}")
+            return findings
 
         except Exception as e:
             logger.error(f"Error in SecureStorageAnalyzer: {e}")
-            findings.append(self._create_error_finding(app, str(e)))
-
-        return findings
+            return []
+        finally:
+            if extracted_path and os.path.exists(extracted_path):
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     async def _analyze_android_storage(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze Android-specific storage patterns."""
-        findings = []
+        """Analyze Android-specific storage patterns.
 
-        import os
+        Scans Java/Kotlin/Smali source for insecure SharedPreferences
+        modes, sensitive data in preferences without encryption, missing
+        KeyStore usage, and backup configuration in AndroidManifest.xml.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted APK.
+
+        Returns:
+            A list of Finding objects for Android storage issues.
+        """
+        findings = []
 
         # Search through decompiled source
         source_dirs = [
@@ -262,10 +336,19 @@ class SecureStorageAnalyzer:
         return findings
 
     async def _analyze_ios_storage(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze iOS-specific storage patterns."""
-        findings = []
+        """Analyze iOS-specific storage patterns.
 
-        import os
+        Scans Objective-C/Swift source for sensitive data in
+        NSUserDefaults without Keychain usage.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted IPA.
+
+        Returns:
+            A list of Finding objects for iOS storage issues.
+        """
+        findings = []
 
         # Search through decompiled source or strings
         source_dirs = [
@@ -335,10 +418,20 @@ class SecureStorageAnalyzer:
         return findings
 
     async def _analyze_database_security(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze database security across platforms."""
-        findings = []
+        """Analyze database security across platforms.
 
-        import os
+        Checks for world-readable/writable SQLite databases, unencrypted
+        databases containing sensitive tables (without SQLCipher), and
+        database files bundled in the application package.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted archive.
+
+        Returns:
+            A list of Finding objects for database security issues.
+        """
+        findings = []
 
         for root, _, files in os.walk(extracted_path):
             for file in files:
@@ -414,10 +507,19 @@ class SecureStorageAnalyzer:
         return findings
 
     async def _analyze_file_storage(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze file storage security."""
-        findings = []
+        """Analyze file storage security for insecure permissions and locations.
 
-        import os
+        Detects use of external storage for data writes and insecure
+        file permission modes (MODE_WORLD_READABLE, setReadable(true, false)).
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted archive.
+
+        Returns:
+            A list of Finding objects for file storage issues.
+        """
+        findings = []
 
         for root, _, files in os.walk(extracted_path):
             for file in files:
@@ -497,67 +599,28 @@ class SecureStorageAnalyzer:
         cwe_id: Optional[str] = None,
         owasp_category: Optional[str] = None,
     ) -> Finding:
-        """Create a security finding."""
-
-        poc_verification = f"""1. Extract the app: {'apktool d app.apk' if app.platform == 'android' else 'unzip app.ipa'}
-2. Navigate to: {file_path or 'the extracted directory'}
-3. Search for the vulnerable pattern
-4. Verify the data storage mechanism"""
-
-        poc_commands = []
-        if app.platform == "android":
-            poc_commands = [
-                f"apktool d {app.file_path} -o /tmp/extracted",
-                f"grep -rn 'SharedPreferences\\|getExternalStorage' /tmp/extracted/",
-                "adb shell run-as <package> cat /data/data/<package>/shared_prefs/*.xml",
-            ]
-        else:
-            poc_commands = [
-                f"unzip -o {app.file_path} -d /tmp/extracted",
-                "strings /tmp/extracted/Payload/*.app/* | grep -i 'NSUserDefaults\\|password\\|token'",
-            ]
-
-        return Finding(
-            finding_id=str(uuid4()),
-            app_id=app.app_id,
-            scan_id=None,
-            title=title,
-            description=description,
-            severity=severity,
-            category=category,
-            file_path=file_path,
-            line_number=line_number,
-            code_snippet=code_snippet,
-            cwe_id=cwe_id,
-            owasp_category=owasp_category,
-            cvss_score=self._calculate_cvss(severity),
-            tool=self.ANALYZER_NAME,
-            status="new",
-            poc_verification=poc_verification,
-            poc_commands=poc_commands,
-        )
-
-    def _create_error_finding(self, app: MobileApp, error: str) -> Finding:
-        """Create an error finding when analysis fails."""
-        return Finding(
-            finding_id=str(uuid4()),
-            app_id=app.app_id,
-            scan_id=None,
-            title="Secure Storage Analysis Error",
-            description=f"An error occurred during secure storage analysis: {error}",
-            severity="info",
-            category="MASVS-STORAGE",
-            tool=self.ANALYZER_NAME,
-            status="new",
-        )
-
-    def _calculate_cvss(self, severity: str) -> float:
-        """Map severity to approximate CVSS score."""
-        severity_map = {
+        """Create a security finding using BaseAnalyzer.create_finding."""
+        severity_cvss_map = {
             "critical": 9.5,
             "high": 7.5,
             "medium": 5.5,
             "low": 3.5,
             "info": 0.0,
         }
-        return severity_map.get(severity, 0.0)
+
+        return self.create_finding(
+            app=app,
+            title=title,
+            description=description,
+            severity=severity,
+            category=category,
+            impact="Insecure data storage can expose sensitive user data to unauthorized access.",
+            remediation="Use secure storage mechanisms such as Android KeyStore or iOS Keychain.",
+            file_path=file_path,
+            line_number=line_number,
+            code_snippet=code_snippet,
+            cwe_id=cwe_id,
+            cvss_score=severity_cvss_map.get(severity, 0.0),
+            owasp_masvs_category="MASVS-STORAGE",
+            owasp_masvs_control="MASVS-STORAGE-1",
+        )

@@ -2,7 +2,7 @@
   <div class="scan-detail-view">
     <div class="page-header">
       <div class="header-content">
-        <Button icon="pi pi-arrow-left" class="p-button-text" @click="$router.back()" />
+        <Button icon="pi pi-arrow-left" class="p-button-text" v-tooltip="'Go Back'" @click="$router.back()" />
         <div>
           <h1>Scan Details</h1>
           <p class="text-secondary">{{ scan?.scan_id }}</p>
@@ -162,6 +162,20 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * ScanDetailView - Individual scan detail page with live progress tracking and results.
+ *
+ * Features:
+ * - Status indicator with icon, progress bar, and current analyzer task
+ * - Findings summary grid broken down by severity (critical through info)
+ * - Scan metadata (ID, app link, type, timestamps, duration)
+ * - Analyzer list with per-analyzer status badges
+ * - Error display for scan-level and per-analyzer failures
+ * - Cancel action for running scans and link to filtered findings view
+ * - 3-second auto-refresh interval while scan is running
+ *
+ * @requires useScansStore - fetches scan details, progress, and cancellation
+ */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useScansStore } from '@/stores/scans'

@@ -1,4 +1,17 @@
-"""SQLAlchemy database models for Mobilicustos."""
+"""SQLAlchemy ORM database models for the Mobilicustos platform.
+
+Defines all database tables and relationships using SQLAlchemy 2.0
+declarative mapping with ``Mapped`` type annotations. All models inherit
+from ``Base`` which configures JSONB mapping for dict and list types.
+
+Core entity relationships:
+    MobileApp --1:N--> Scan --1:N--> Finding
+    MobileApp --1:N--> Secret
+    MobileApp --1:N--> MLModel
+    Device (standalone)
+    FridaScript (standalone, linked via BypassResult)
+    BypassResult (linked to MobileApp + Device)
+"""
 
 from datetime import datetime
 from decimal import Decimal
@@ -20,7 +33,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
-    """Base class for all models."""
+    """Base class for all ORM models.
+
+    Configures automatic JSONB column mapping for ``dict[str, Any]`` and
+    ``list[Any]`` type annotations, so Python dicts and lists are stored
+    as PostgreSQL JSONB columns without explicit column type declarations.
+    """
 
     type_annotation_map = {
         dict[str, Any]: JSONB,
@@ -29,7 +47,12 @@ class Base(DeclarativeBase):
 
 
 class MobileApp(Base):
-    """Mobile application model."""
+    """Represents an uploaded mobile application (APK or IPA).
+
+    Stores application metadata, framework detection results, signing info,
+    SDK version targets, and analysis status. Serves as the root entity for
+    scans, findings, secrets, and ML model associations.
+    """
 
     __tablename__ = "mobile_apps"
 
@@ -80,7 +103,12 @@ class MobileApp(Base):
 
 
 class Scan(Base):
-    """Scan model."""
+    """Represents a security scan execution against a mobile application.
+
+    Tracks scan configuration (type, enabled analyzers), execution state
+    (status, progress, current analyzer), results summary (findings count
+    by severity), timing, and any errors encountered during analysis.
+    """
 
     __tablename__ = "scans"
 
@@ -122,7 +150,17 @@ class Scan(Base):
 
 
 class Finding(Base):
-    """Finding model with rich content."""
+    """Represents a security finding discovered during analysis.
+
+    Contains the full finding lifecycle: classification (severity, category,
+    CWE, OWASP mapping), location (file path, line number, code snippet),
+    proof-of-concept evidence (commands, Frida scripts, screenshots), and
+    remediation guidance (commands, code examples, resource links).
+
+    Finding deduplication uses ``canonical_id`` -- a deterministic hash of
+    the finding's key attributes plus the scan ID prefix to prevent
+    collisions across scans while merging identical findings within a scan.
+    """
 
     __tablename__ = "findings"
 
@@ -195,7 +233,12 @@ class Finding(Base):
 
 
 class AttackPath(Base):
-    """Attack path model for Neo4j sync."""
+    """Represents a chained attack path linking multiple findings.
+
+    Models multi-step exploitation scenarios where individual findings
+    combine to create higher-impact attack vectors. Synchronized with
+    Neo4j for graph-based visualization and traversal.
+    """
 
     __tablename__ = "attack_paths"
 
@@ -228,7 +271,13 @@ class AttackPath(Base):
 
 
 class MLModel(Base):
-    """ML model extracted from apps."""
+    """Represents a machine learning model extracted from an application.
+
+    Stores metadata about ML models found in app binaries (TFLite,
+    CoreML, ONNX, etc.), including tensor shapes, operations, labels,
+    and security-relevant findings like PII exposure or adversarial
+    susceptibility.
+    """
 
     __tablename__ = "ml_models"
 
@@ -269,7 +318,12 @@ class MLModel(Base):
 
 
 class Secret(Base):
-    """Detected secrets/credentials."""
+    """Represents a hardcoded secret or credential detected in an application.
+
+    Stores the redacted value, hash for deduplication, provider information,
+    file location, and optional validation status (whether the secret is
+    still active/valid).
+    """
 
     __tablename__ = "secrets"
 
@@ -314,7 +368,12 @@ class Secret(Base):
 
 
 class Device(Base):
-    """Device registry for physical/emulator/Corellium devices."""
+    """Represents a registered testing device (physical, emulator, or virtual).
+
+    Stores device identity, hardware info, connection details, root/jailbreak
+    status, and Frida server state. Supports Android (ADB), iOS
+    (libimobiledevice), and Corellium virtual devices.
+    """
 
     __tablename__ = "devices"
 
@@ -350,7 +409,13 @@ class Device(Base):
 
 
 class FridaScript(Base):
-    """Frida script library."""
+    """Represents a Frida JavaScript script in the script library.
+
+    Scripts are categorized (bypass, hook, recon) with subcategories for
+    specific protection types. Supports platform targeting, framework
+    filtering, and builtin vs. user-uploaded distinction. Used by the
+    bypass orchestrator for automated protection circumvention.
+    """
 
     __tablename__ = "frida_scripts"
 
@@ -385,7 +450,12 @@ class FridaScript(Base):
 
 
 class BypassResult(Base):
-    """Anti-detection bypass tracking."""
+    """Records the result of an anti-detection bypass attempt.
+
+    Tracks which protection was detected, what method was used for
+    detection, which Frida script was tried, whether the bypass
+    succeeded, and captures proof-of-concept evidence.
+    """
 
     __tablename__ = "bypass_results"
 
@@ -423,7 +493,12 @@ class BypassResult(Base):
 
 
 class DrozerSession(Base):
-    """Drozer session for dynamic Android testing."""
+    """Represents a Drozer session for dynamic Android component testing.
+
+    Tracks the Drozer agent connection, execution state, and associated
+    module execution results for IPC, content provider, and component
+    security testing.
+    """
 
     __tablename__ = "drozer_sessions"
 
@@ -459,7 +534,12 @@ class DrozerSession(Base):
 
 
 class DrozerResult(Base):
-    """Results from Drozer module execution."""
+    """Stores the output from a single Drozer module execution.
+
+    Contains the module name, arguments, raw output text, structured
+    result data, and optional link to a Finding if the result was
+    converted into a security finding.
+    """
 
     __tablename__ = "drozer_results"
 
@@ -491,7 +571,12 @@ class DrozerResult(Base):
 
 
 class ObjectionSession(Base):
-    """Objection session for runtime manipulation."""
+    """Represents an Objection session for runtime security exploration.
+
+    Objection wraps Frida to provide high-level commands for SSL pinning
+    bypass, filesystem access, keychain dumping, and other runtime
+    security tasks. Tracks session state and command history.
+    """
 
     __tablename__ = "objection_sessions"
 
@@ -525,7 +610,12 @@ class ObjectionSession(Base):
 
 
 class CVECache(Base):
-    """Cached CVE information for faster lookups."""
+    """Cached CVE (Common Vulnerabilities and Exposures) information.
+
+    Stores CVE details fetched from NVD/OSV databases to avoid repeated
+    API calls. Includes severity scoring, affected product/version info,
+    exploit availability, and cache expiration for TTL-based invalidation.
+    """
 
     __tablename__ = "cve_cache"
 
@@ -561,7 +651,13 @@ class CVECache(Base):
 
 
 class LibraryFingerprint(Base):
-    """Cached library fingerprints for fast lookup."""
+    """Cached library fingerprint data for binary identification.
+
+    Stores signatures (file hashes, export symbols, version strings) that
+    identify specific library versions in native binaries. Used by the
+    ``LibraryFingerprinter`` to match embedded libraries against known
+    versions with CVE data.
+    """
 
     __tablename__ = "library_fingerprints"
 

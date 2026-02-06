@@ -1,7 +1,19 @@
-"""API Endpoint Extractor.
+"""API endpoint extractor and analyzer for mobile applications.
 
-Extracts and analyzes API endpoints from mobile applications,
-including REST, GraphQL, and WebSocket endpoints.
+Extracts and catalogs API endpoints discovered in mobile application binaries,
+including REST APIs, GraphQL endpoints, WebSocket connections, and gRPC
+channels. Analyzes extracted endpoints for security issues such as HTTP
+usage, hardcoded authentication, and missing input validation patterns.
+
+Endpoint discovery methods:
+    - URL string pattern matching in DEX/Mach-O bytecode
+    - JSON configuration file parsing (API configs, environment files)
+    - Retrofit/Volley annotation pattern detection (Android)
+    - URLSession/Alamofire URL construction pattern detection (iOS)
+
+OWASP references:
+    - MASVS-NETWORK-1: Secure network communication
+    - CWE-319: Cleartext Transmission of Sensitive Information
 """
 
 import json
@@ -460,6 +472,87 @@ class APIEndpointExtractor(BaseAnalyzer):
 <items burpVersion="2023.1" exportTime="{__import__('datetime').datetime.now().isoformat()}">
 {''.join(xml_items)}
 </items>"""
+
+    def generate_postman_collection(self, endpoints: list[APIEndpoint], app_name: str = "Mobile App") -> dict:
+        """Generate Postman Collection v2.1 JSON format."""
+        # Group endpoints by host
+        hosts: dict[str, list[APIEndpoint]] = {}
+        for ep in endpoints:
+            try:
+                parsed = urlparse(ep.url)
+                host = parsed.netloc or "unknown"
+                if host not in hosts:
+                    hosts[host] = []
+                hosts[host].append(ep)
+            except Exception:
+                pass
+
+        # Build folder items grouped by host
+        folders = []
+        for host, host_endpoints in sorted(hosts.items()):
+            items = []
+            for ep in host_endpoints:
+                try:
+                    parsed = urlparse(ep.url)
+                    path = parsed.path or "/"
+                    method = (ep.method or "GET").upper()
+
+                    # Build URL object
+                    url_obj: dict = {
+                        "raw": ep.url,
+                        "protocol": parsed.scheme or "https",
+                        "host": host.split(":")[0].split("."),
+                        "path": [seg for seg in path.split("/") if seg],
+                    }
+                    if parsed.port:
+                        url_obj["port"] = str(parsed.port)
+                    if parsed.query:
+                        url_obj["query"] = [
+                            {"key": kv.split("=")[0], "value": kv.split("=")[1] if "=" in kv else ""}
+                            for kv in parsed.query.split("&")
+                        ]
+
+                    request_obj: dict = {
+                        "method": method,
+                        "header": [
+                            {"key": "Content-Type", "value": "application/json"},
+                            {"key": "Accept", "value": "application/json"},
+                        ],
+                        "url": url_obj,
+                    }
+
+                    # Add body placeholder for non-GET methods
+                    if method in ("POST", "PUT", "PATCH"):
+                        request_obj["body"] = {
+                            "mode": "raw",
+                            "raw": "{}",
+                            "options": {
+                                "raw": {"language": "json"}
+                            }
+                        }
+
+                    items.append({
+                        "name": f"{method} {path}",
+                        "request": request_obj,
+                        "response": [],
+                    })
+                except Exception:
+                    pass
+
+            if items:
+                folders.append({
+                    "name": host,
+                    "item": items,
+                })
+
+        return {
+            "info": {
+                "name": f"{app_name} - Extracted API Endpoints",
+                "description": f"API endpoints extracted from {app_name} by Mobilicustos",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+            },
+            "item": folders,
+        }
 
     def generate_openapi_spec(self, endpoints: list[APIEndpoint], base_url: str) -> dict:
         """Generate basic OpenAPI spec from extracted endpoints."""

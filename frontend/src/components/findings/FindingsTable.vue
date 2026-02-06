@@ -113,6 +113,19 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * FindingsTable - Reusable, paginated data table for displaying security findings.
+ *
+ * Features:
+ * - Sortable columns for severity, tool, title, platform, status, and date
+ * - Expandable rows with FindingDetail inline component
+ * - Severity, status, platform, and tool badges with color coding
+ * - Lazy pagination with configurable page size (25/50/100)
+ * - Empty state and loading spinner display
+ * - Emits page-change and sort-change events for parent-driven data fetching
+ *
+ * @requires FindingDetail - renders expanded finding details inline
+ */
 import { ref, computed } from 'vue'
 import type { Finding } from '@/stores/findings'
 import DataTable, { type DataTableSortEvent } from 'primevue/datatable'

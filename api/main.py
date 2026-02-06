@@ -1,4 +1,19 @@
-"""Mobilicustos API - Mobile Security Penetration Testing Platform."""
+"""Mobilicustos API -- Mobile Security Penetration Testing Platform.
+
+Entry point for the FastAPI application. Configures:
+    - Application lifecycle (startup/shutdown with Frida script seeding).
+    - CORS middleware for frontend communication.
+    - Router registration for all API endpoint modules.
+    - Root endpoint returning platform metadata.
+
+The application is structured around these major API areas:
+    - **Apps & Scans**: Upload, manage, and scan mobile applications.
+    - **Findings & Reports**: View, filter, and export security findings.
+    - **Devices**: Manage physical/emulator/Corellium test devices.
+    - **Dynamic Analysis**: Frida injection, Drozer sessions, Objection.
+    - **Bypass**: Automated protection detection and bypass attempts.
+    - **Integrations**: Burp Suite, SIEM/SOAR, issue trackers, app stores.
+"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -7,7 +22,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import get_settings
+from api.data.frida_scripts.seed import seed_builtin_scripts
+from api.database import async_session_factory
 from api.routers import (
+    api_endpoints,
     app_stores,
     apps,
     attack_paths,
@@ -35,6 +53,7 @@ from api.routers import (
     scheduled_scans,
     screenshot,
     secrets,
+    settings as settings_router,
     siem,
     teams,
     webhooks,
@@ -55,6 +74,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting Mobilicustos API...")
     # Startup tasks
+    try:
+        async with async_session_factory() as db:
+            await seed_builtin_scripts(db)
+    except Exception:
+        logger.exception("Failed to seed built-in Frida scripts (non-fatal)")
     yield
     # Shutdown tasks
     logger.info("Shutting down Mobilicustos API...")
@@ -107,6 +131,8 @@ app.include_router(runtime_monitor.router, prefix="/api", tags=["Runtime Monitor
 app.include_router(fuzzing.router, prefix="/api", tags=["Fuzzing"])
 app.include_router(screenshot.router, prefix="/api", tags=["Screen Capture"])
 app.include_router(corellium.router, prefix="/api", tags=["Corellium"])
+app.include_router(api_endpoints.router, prefix="/api/api-endpoints", tags=["API Endpoints"])
+app.include_router(settings_router.router, prefix="/api/settings", tags=["Settings"])
 
 
 @app.get("/")

@@ -183,6 +183,19 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * DevicesView - Connected device management for dynamic analysis operations.
+ *
+ * Features:
+ * - Device discovery via ADB and manual device registration dialog
+ * - Device cards showing platform, model, connection type, and root/jailbreak status
+ * - Frida server status, installation, and start controls per device
+ * - Support for physical, emulator, Genymotion, and Corellium device types
+ * - Device deletion with confirmation dialog
+ *
+ * @requires useDevicesStore - device CRUD, discovery, Frida install/start operations
+ * @requires devicesApi - device registration endpoint
+ */
 import { ref, onMounted } from 'vue'
 import { useDevicesStore, type Device } from '@/stores/devices'
 import { useConfirm } from 'primevue/useconfirm'

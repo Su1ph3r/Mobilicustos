@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { appsApi } from '@/services/api'
 
+/** Represents an uploaded mobile application with metadata, framework info, and signing details */
 export interface MobileApp {
   app_id: string
   package_name: string
@@ -25,6 +26,7 @@ export interface MobileApp {
   metadata: Record<string, any>
 }
 
+/** Aggregated statistics for a single application including scan count and findings breakdown */
 export interface AppStats {
   app_id: string
   scan_count: number
@@ -33,6 +35,10 @@ export interface AppStats {
   findings_by_category: Record<string, number>
 }
 
+/**
+ * Apps store managing the mobile application list, individual app details, and per-app statistics.
+ * Provides paginated fetching, platform/framework/status filtering, upload, and deletion.
+ */
 export const useAppsStore = defineStore('apps', () => {
   const apps = ref<MobileApp[]>([])
   const currentApp = ref<MobileApp | null>(null)
@@ -53,6 +59,7 @@ export const useAppsStore = defineStore('apps', () => {
     search: null as string | null,
   })
 
+  /** Fetch paginated app list applying current filters and pagination state */
   async function fetchApps() {
     loading.value = true
     error.value = null
@@ -79,6 +86,7 @@ export const useAppsStore = defineStore('apps', () => {
     }
   }
 
+  /** Fetch a single app by ID and set it as the current app */
   async function fetchApp(id: string) {
     loading.value = true
     error.value = null
@@ -92,6 +100,7 @@ export const useAppsStore = defineStore('apps', () => {
     }
   }
 
+  /** Fetch scan and findings statistics for a specific app */
   async function fetchAppStats(id: string) {
     try {
       const response = await appsApi.getStats(id)
@@ -101,6 +110,7 @@ export const useAppsStore = defineStore('apps', () => {
     }
   }
 
+  /** Upload an APK/IPA/AAB file and prepend the new app to the list */
   async function uploadApp(file: File) {
     loading.value = true
     error.value = null
@@ -116,6 +126,7 @@ export const useAppsStore = defineStore('apps', () => {
     }
   }
 
+  /** Delete an app by ID and remove it from the local list */
   async function deleteApp(id: string) {
     loading.value = true
     error.value = null
@@ -130,11 +141,13 @@ export const useAppsStore = defineStore('apps', () => {
     }
   }
 
+  /** Navigate to a specific page and re-fetch the app list */
   function setPage(page: number) {
     pagination.value.page = page
     fetchApps()
   }
 
+  /** Merge new filter values, reset to page 1, and re-fetch the app list */
   function setFilters(newFilters: Partial<typeof filters.value>) {
     filters.value = { ...filters.value, ...newFilters }
     pagination.value.page = 1

@@ -1,4 +1,26 @@
-"""Network analyzer — Frida-based network traffic analysis + Drozer IPC testing."""
+"""Network analyzer -- Frida-based network traffic analysis and Drozer IPC testing.
+
+Performs dynamic network security analysis by hooking networking APIs at
+runtime to detect insecure communication patterns. Optionally runs Drozer
+modules for Android IPC (Intent, Content Provider, Broadcast) security
+testing.
+
+Dynamic checks include:
+    - HTTP (cleartext) connections detected at runtime
+    - SSL/TLS certificate validation behavior
+    - WebSocket connections without TLS
+    - Content provider data leakage via Drozer
+    - Broadcast receiver exposure via Drozer
+    - Intent sniffing and injection testing
+
+Note:
+    This analyzer requires a connected device with frida-server running
+    and is only executed during ``scan_type="dynamic"`` or ``scan_type="full"``
+    scans.
+
+OWASP references:
+    - MASVS-NETWORK-1, MASVS-NETWORK-2, MASVS-PLATFORM-1
+"""
 
 import asyncio
 import logging
@@ -155,7 +177,204 @@ Java.perform(function() {
         };
     } catch(e) {}
 
-    send({type: 'hooks_ready', count: 8});
+    // ---- DNS Resolution Monitoring ----
+    // 9. InetAddress.getByName() — log hostnames being resolved
+    try {
+        var InetAddress = Java.use('java.net.InetAddress');
+        InetAddress.getByName.overload('java.lang.String').implementation = function(host) {
+            console.log('[*] InetAddress.getByName(): ' + host);
+            send({type: 'dns_resolution', hostname: host});
+            reportFinding('DNS', 'DNS resolution detected at runtime',
+                'info', 'InetAddress.getByName("' + host + '") - app resolves hostname');
+            return this.getByName(host);
+        };
+    } catch(e) { console.log('[-] Failed to hook InetAddress.getByName: ' + e); }
+
+    // 10. InetAddress.getAllByName() — log bulk DNS lookups
+    try {
+        var InetAddress = Java.use('java.net.InetAddress');
+        InetAddress.getAllByName.overload('java.lang.String').implementation = function(host) {
+            console.log('[*] InetAddress.getAllByName(): ' + host);
+            send({type: 'dns_resolution', hostname: host});
+            reportFinding('DNS', 'Bulk DNS resolution detected at runtime',
+                'info', 'InetAddress.getAllByName("' + host + '") - app resolves all addresses for hostname');
+            return this.getAllByName(host);
+        };
+    } catch(e) { console.log('[-] Failed to hook InetAddress.getAllByName: ' + e); }
+
+    // ---- Certificate Chain Inspection ----
+    // 11. X509TrustManager.checkServerTrusted() — log certificate chain details
+    try {
+        var X509TrustManager = Java.use('javax.net.ssl.X509TrustManager');
+        var TrustManagerImpl = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+        TrustManagerImpl.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String').implementation = function(chain, authType) {
+            console.log('[*] X509TrustManager.checkServerTrusted() authType: ' + authType + ' chain length: ' + chain.length);
+            var chainInfo = [];
+            try {
+                for (var i = 0; i < chain.length; i++) {
+                    var cert = chain[i];
+                    var subject = cert.getSubjectDN().toString();
+                    var issuer = cert.getIssuerDN().toString();
+                    var notAfter = cert.getNotAfter().toString();
+                    var notBefore = cert.getNotBefore().toString();
+                    chainInfo.push('Cert[' + i + ']: subject=' + subject + ' | issuer=' + issuer + ' | validFrom=' + notBefore + ' | validUntil=' + notAfter);
+                }
+            } catch(e2) { console.log('[-] Error reading cert chain: ' + e2); }
+            var detail = 'authType: ' + authType + ' | chain: ' + chainInfo.join(' ; ');
+            reportFinding('Certificate', 'TLS certificate chain inspected at runtime',
+                'info', detail.substring(0, 1000));
+            send({type: 'cert_chain', authType: authType, chainLength: chain.length, details: chainInfo});
+            return this.checkServerTrusted(chain, authType);
+        };
+    } catch(e) { console.log('[-] Failed to hook TrustManagerImpl.checkServerTrusted: ' + e); }
+
+    // 12. Fallback: Hook the interface method via platform TrustManager
+    try {
+        var PlatformTrustManager = Java.use('android.security.net.config.NetworkSecurityTrustManager');
+        PlatformTrustManager.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String').implementation = function(chain, authType) {
+            console.log('[*] NetworkSecurityTrustManager.checkServerTrusted() authType: ' + authType);
+            var chainInfo = [];
+            try {
+                for (var i = 0; i < chain.length; i++) {
+                    var cert = chain[i];
+                    chainInfo.push('Cert[' + i + ']: subject=' + cert.getSubjectDN().toString() + ' | issuer=' + cert.getIssuerDN().toString());
+                }
+            } catch(e2) {}
+            reportFinding('Certificate', 'Network security TrustManager inspected certificate chain',
+                'info', 'authType: ' + authType + ' | ' + chainInfo.join(' ; '));
+            return this.checkServerTrusted(chain, authType);
+        };
+    } catch(e) { console.log('[-] Failed to hook NetworkSecurityTrustManager: ' + e); }
+
+    // ---- WebSocket Monitoring ----
+    // 13. OkHttp WebSocket.send() — monitor outgoing WebSocket messages
+    try {
+        var RealWebSocket = Java.use('okhttp3.internal.ws.RealWebSocket');
+        RealWebSocket.send.overload('java.lang.String').implementation = function(text) {
+            console.log('[*] WebSocket.send() text length: ' + (text ? text.length : 0));
+            reportFinding('WebSocket', 'WebSocket message sent at runtime',
+                'info', 'WebSocket.send() text message, length: ' + (text ? text.length : 0));
+            return this.send(text);
+        };
+    } catch(e) { console.log('[-] Failed to hook RealWebSocket.send(String): ' + e); }
+
+    // 14. OkHttp WebSocket.send(ByteString) — binary messages
+    try {
+        var RealWebSocket = Java.use('okhttp3.internal.ws.RealWebSocket');
+        var ByteString = Java.use('okio.ByteString');
+        RealWebSocket.send.overload('okio.ByteString').implementation = function(bytes) {
+            var size = bytes ? bytes.size() : 0;
+            console.log('[*] WebSocket.send() binary, size: ' + size);
+            reportFinding('WebSocket', 'WebSocket binary message sent at runtime',
+                'info', 'WebSocket.send() binary message, size: ' + size + ' bytes');
+            return this.send(bytes);
+        };
+    } catch(e) { console.log('[-] Failed to hook RealWebSocket.send(ByteString): ' + e); }
+
+    // 15. OkHttp WebSocket.close()
+    try {
+        var RealWebSocket = Java.use('okhttp3.internal.ws.RealWebSocket');
+        RealWebSocket.close.overload('int', 'java.lang.String').implementation = function(code, reason) {
+            console.log('[*] WebSocket.close() code: ' + code + ' reason: ' + reason);
+            reportFinding('WebSocket', 'WebSocket connection closed at runtime',
+                'info', 'WebSocket.close() code: ' + code + ' | reason: ' + (reason || 'null'));
+            return this.close(code, reason);
+        };
+    } catch(e) { console.log('[-] Failed to hook RealWebSocket.close: ' + e); }
+
+    // 16. OkHttp WebSocketListener.onMessage() — monitor incoming messages
+    try {
+        var WebSocketListener = Java.use('okhttp3.WebSocketListener');
+        WebSocketListener.onMessage.overload('okhttp3.WebSocket', 'java.lang.String').implementation = function(ws, text) {
+            console.log('[*] WebSocketListener.onMessage() text length: ' + (text ? text.length : 0));
+            reportFinding('WebSocket', 'WebSocket message received at runtime',
+                'info', 'WebSocketListener.onMessage() text message received, length: ' + (text ? text.length : 0));
+            return this.onMessage(ws, text);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebSocketListener.onMessage(String): ' + e); }
+
+    // 17. OkHttp WebSocketListener.onMessage(ByteString) — binary incoming
+    try {
+        var WebSocketListener = Java.use('okhttp3.WebSocketListener');
+        var ByteString = Java.use('okio.ByteString');
+        WebSocketListener.onMessage.overload('okhttp3.WebSocket', 'okio.ByteString').implementation = function(ws, bytes) {
+            var size = bytes ? bytes.size() : 0;
+            console.log('[*] WebSocketListener.onMessage() binary, size: ' + size);
+            reportFinding('WebSocket', 'WebSocket binary message received at runtime',
+                'info', 'WebSocketListener.onMessage() binary message received, size: ' + size + ' bytes');
+            return this.onMessage(ws, bytes);
+        };
+    } catch(e) { console.log('[-] Failed to hook WebSocketListener.onMessage(ByteString): ' + e); }
+
+    // ---- Cookie/Session Tracking ----
+    // 18. CookieManager.setCookie()
+    try {
+        var CookieManager = Java.use('android.webkit.CookieManager');
+        CookieManager.setCookie.overload('java.lang.String', 'java.lang.String').implementation = function(url, value) {
+            var redactedValue = 'null';
+            try {
+                if (value) {
+                    // Redact cookie value but keep the name and domain info
+                    var parts = value.split('=');
+                    if (parts.length >= 2) {
+                        redactedValue = parts[0] + '=[REDACTED]';
+                        // Preserve flags after the value
+                        var rest = value.split(';');
+                        if (rest.length > 1) {
+                            for (var i = 1; i < rest.length; i++) {
+                                redactedValue += ';' + rest[i].trim();
+                            }
+                        }
+                    } else {
+                        redactedValue = '[REDACTED]';
+                    }
+                }
+            } catch(e2) { redactedValue = '[parse error]'; }
+            console.log('[*] CookieManager.setCookie() url: ' + url);
+            reportFinding('Cookie', 'Cookie set via CookieManager at runtime',
+                'info', 'CookieManager.setCookie() domain: ' + (url || 'null') + ' | cookie: ' + redactedValue);
+
+            // Check for missing Secure/HttpOnly flags
+            var valueLower = value ? value.toLowerCase() : '';
+            if (valueLower.indexOf('secure') === -1) {
+                reportFinding('Cookie', 'Cookie set without Secure flag',
+                    'medium', 'CookieManager.setCookie() for ' + (url || 'null') + ' - cookie lacks Secure flag, may be sent over cleartext');
+            }
+            if (valueLower.indexOf('httponly') === -1) {
+                reportFinding('Cookie', 'Cookie set without HttpOnly flag',
+                    'low', 'CookieManager.setCookie() for ' + (url || 'null') + ' - cookie lacks HttpOnly flag, accessible via JavaScript');
+            }
+            return this.setCookie(url, value);
+        };
+    } catch(e) { console.log('[-] Failed to hook CookieManager.setCookie: ' + e); }
+
+    // 19. CookieManager.getCookie()
+    try {
+        var CookieManager = Java.use('android.webkit.CookieManager');
+        CookieManager.getCookie.overload('java.lang.String').implementation = function(url) {
+            var result = this.getCookie(url);
+            console.log('[*] CookieManager.getCookie() url: ' + url);
+            var redacted = 'null';
+            try {
+                if (result) {
+                    var cookies = result.split(';');
+                    var redactedParts = [];
+                    for (var i = 0; i < cookies.length; i++) {
+                        var parts = cookies[i].trim().split('=');
+                        if (parts.length >= 2) {
+                            redactedParts.push(parts[0] + '=[REDACTED]');
+                        }
+                    }
+                    redacted = redactedParts.join('; ');
+                }
+            } catch(e2) { redacted = '[parse error]'; }
+            reportFinding('Cookie', 'Cookie read via CookieManager at runtime',
+                'info', 'CookieManager.getCookie() domain: ' + (url || 'null') + ' | cookies: ' + redacted);
+            return result;
+        };
+    } catch(e) { console.log('[-] Failed to hook CookieManager.getCookie: ' + e); }
+
+    send({type: 'hooks_ready', count: 19});
 });
 
 setTimeout(function() {
@@ -578,6 +797,18 @@ class NetworkAnalyzer(BaseAnalyzer):
             "IPC": {"cwe_id": "CWE-927", "owasp": "MASVS-PLATFORM",
                 "impact": "Implicit broadcasts can be intercepted by malicious apps.",
                 "remediation": "Use LocalBroadcastManager or explicit intents for sensitive data."},
+            "DNS": {"cwe_id": "CWE-200", "owasp": "MASVS-NETWORK",
+                "impact": "DNS resolutions reveal backend infrastructure and can be intercepted for DNS spoofing.",
+                "remediation": "Use DNS-over-HTTPS (DoH) or DNS-over-TLS (DoT). Validate DNS responses."},
+            "Certificate": {"cwe_id": "CWE-295", "owasp": "MASVS-NETWORK",
+                "impact": "Weak or improperly validated certificate chains enable man-in-the-middle attacks.",
+                "remediation": "Implement certificate pinning. Validate certificate chains properly. Check expiry dates."},
+            "WebSocket": {"cwe_id": "CWE-319", "owasp": "MASVS-NETWORK",
+                "impact": "WebSocket connections may transmit sensitive data. Insecure WebSocket (ws://) traffic can be intercepted.",
+                "remediation": "Use secure WebSockets (wss://). Validate WebSocket origins. Implement message-level encryption for sensitive data."},
+            "Cookie": {"cwe_id": "CWE-614", "owasp": "MASVS-NETWORK",
+                "impact": "Cookies without Secure/HttpOnly flags can be intercepted or accessed by JavaScript, enabling session hijacking.",
+                "remediation": "Set Secure and HttpOnly flags on all sensitive cookies. Use SameSite attribute. Implement proper session management."},
         }.get(category, {"cwe_id": "CWE-319", "owasp": "MASVS-NETWORK",
             "impact": "Network security issue detected.", "remediation": "Review and fix."})
 

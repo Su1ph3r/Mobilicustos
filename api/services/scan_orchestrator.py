@@ -1,4 +1,23 @@
-"""Scan orchestrator service for coordinating analysis."""
+"""Scan orchestrator service for coordinating security analysis pipelines.
+
+This module provides the core scan execution engine for Mobilicustos. It coordinates
+the execution of multiple static and dynamic analyzers against mobile applications
+(Android APKs and iOS IPAs), managing analyzer lifecycle, progress tracking,
+finding persistence, and error recovery.
+
+The orchestrator supports three scan types:
+    - **static**: Runs platform-specific static analyzers only (manifest, DEX, secrets, etc.)
+    - **dynamic**: Runs Frida-based runtime and network analyzers only.
+    - **full**: Runs both static and dynamic analyzers.
+
+Cross-platform analyzers (Flutter, React Native, ML models) are automatically included
+when the app's detected framework matches a supported cross-platform technology.
+
+Typical usage:
+    The ``run_scan`` coroutine is invoked as a FastAPI background task after a scan
+    record is created via the ``/api/scans`` endpoint. It creates its own database
+    session to avoid sharing the request-scoped session across async boundaries.
+"""
 
 import asyncio
 import logging
@@ -32,6 +51,22 @@ STATIC_ANALYZERS = {
         "firebase_analyzer",
         "authentication_analyzer",
         "data_leakage_analyzer",
+        "api_endpoint_extractor",
+        # Wired existing analyzers
+        "binary_protection_analyzer",
+        "crypto_auditor",
+        "dependency_analyzer",
+        "ipc_scanner",
+        "privacy_analyzer",
+        "secure_storage_analyzer",
+        "webview_auditor",
+        # New analyzers
+        "obfuscation_analyzer",
+        "deeplink_analyzer",
+        "backup_analyzer",
+        "component_security_analyzer",
+        "logging_analyzer",
+        "permissions_analyzer",
     ],
     "ios": [
         "plist_analyzer",
@@ -43,6 +78,11 @@ STATIC_ANALYZERS = {
         "firebase_analyzer",
         "authentication_analyzer",
         "data_leakage_analyzer",
+        "api_endpoint_extractor",
+        # Cross-platform analyzers for iOS
+        "crypto_auditor",
+        "dependency_analyzer",
+        "privacy_analyzer",
     ],
     "cross_platform": [
         "flutter_analyzer",
@@ -53,7 +93,15 @@ STATIC_ANALYZERS = {
 
 
 async def run_scan(scan_id: UUID) -> None:
-    """Run a scan asynchronously."""
+    """Execute a scan as an asynchronous background task.
+
+    Creates a dedicated database session (separate from the request session) and
+    delegates to ``ScanOrchestrator.execute_scan``. On failure, the scan status is
+    set to ``failed`` with a truncated error message.
+
+    Args:
+        scan_id: UUID of the Scan record to execute.
+    """
     # Create new database session for background task
     engine = create_async_engine(settings.database_url)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
@@ -102,15 +150,44 @@ async def run_scan(scan_id: UUID) -> None:
 
 
 class ScanOrchestrator:
-    """Orchestrates the scan process."""
+    """Orchestrates the multi-analyzer scan pipeline for a mobile application.
+
+    Manages the sequential execution of static and dynamic analyzers, persists
+    findings to the database, creates Secret entries for discovered credentials,
+    and tracks progress/errors throughout the scan lifecycle.
+
+    Attributes:
+        db: Async SQLAlchemy session for database operations.
+        docker: Docker executor for container-based analysis tools.
+        findings: Accumulated list of Finding objects produced during the scan.
+    """
 
     def __init__(self, db: AsyncSession):
+        """Initialize the orchestrator with a database session.
+
+        Args:
+            db: Async SQLAlchemy session for persisting scan results.
+        """
         self.db = db
         self.docker = DockerExecutor()
         self.findings: list[Finding] = []
 
     async def execute_scan(self, scan: Scan, app: MobileApp) -> None:
-        """Execute a complete scan."""
+        """Execute a complete scan by running all configured analyzers sequentially.
+
+        Iterates through the analyzer list, runs each one, saves findings to the
+        database, and updates scan progress. Findings from the ``secret_scanner``
+        analyzer are additionally saved as ``Secret`` entries. If an individual
+        analyzer fails, the error is recorded and execution continues with the
+        next analyzer.
+
+        Args:
+            scan: The Scan database record to execute.
+            app: The MobileApp database record to analyze.
+
+        Raises:
+            Exception: Re-raised after setting scan status to ``failed``.
+        """
         try:
             # Determine analyzers to run
             analyzers = self._get_analyzers(scan, app)
@@ -180,7 +257,22 @@ class ScanOrchestrator:
             raise
 
     def _get_analyzers(self, scan: Scan, app: MobileApp) -> list[str]:
-        """Determine which analyzers to run."""
+        """Determine which analyzers to run based on scan type and app platform.
+
+        Resolution order:
+        1. If ``scan.analyzers_enabled`` is explicitly set, use that list.
+        2. If ``scan_type`` is ``dynamic``, return only runtime + network analyzers.
+        3. Otherwise, select platform-specific static analyzers and optionally
+           append cross-platform analyzers (Flutter, React Native, ML) if the
+           app framework matches. Full scans also include dynamic analyzers.
+
+        Args:
+            scan: The Scan record containing type and optional analyzer list.
+            app: The MobileApp record with platform and framework metadata.
+
+        Returns:
+            Ordered list of analyzer names to execute.
+        """
         if scan.analyzers_enabled:
             return scan.analyzers_enabled
 
@@ -206,7 +298,19 @@ class ScanOrchestrator:
         analyzer_name: str,
         app: MobileApp,
     ) -> list[Finding]:
-        """Run a specific analyzer."""
+        """Dynamically import and execute a specific analyzer by name.
+
+        Uses lazy imports to avoid loading all analyzer modules at startup.
+        Each analyzer is instantiated and its ``analyze(app)`` method is called.
+
+        Args:
+            analyzer_name: String identifier matching one of the registered analyzers.
+            app: The MobileApp record to analyze.
+
+        Returns:
+            List of Finding objects produced by the analyzer, or an empty list
+            if the analyzer is unknown or not yet implemented.
+        """
         # Import analyzer module dynamically
         try:
             if analyzer_name == "manifest_analyzer":
@@ -266,6 +370,48 @@ class ScanOrchestrator:
             elif analyzer_name == "network_analyzer":
                 from api.services.analyzers.network_analyzer import NetworkAnalyzer
                 analyzer = NetworkAnalyzer()
+            elif analyzer_name == "api_endpoint_extractor":
+                from api.services.analyzers.api_endpoint_extractor import APIEndpointExtractor
+                analyzer = APIEndpointExtractor()
+            elif analyzer_name == "binary_protection_analyzer":
+                from api.services.analyzers.binary_protection_analyzer import BinaryProtectionAnalyzer
+                analyzer = BinaryProtectionAnalyzer()
+            elif analyzer_name == "crypto_auditor":
+                from api.services.analyzers.crypto_auditor import CryptoAuditor
+                analyzer = CryptoAuditor()
+            elif analyzer_name == "dependency_analyzer":
+                from api.services.analyzers.dependency_analyzer import DependencyAnalyzer
+                analyzer = DependencyAnalyzer()
+            elif analyzer_name == "ipc_scanner":
+                from api.services.analyzers.ipc_scanner import IPCScanner
+                analyzer = IPCScanner()
+            elif analyzer_name == "privacy_analyzer":
+                from api.services.analyzers.privacy_analyzer import PrivacyAnalyzer
+                analyzer = PrivacyAnalyzer()
+            elif analyzer_name == "secure_storage_analyzer":
+                from api.services.analyzers.secure_storage_analyzer import SecureStorageAnalyzer
+                analyzer = SecureStorageAnalyzer()
+            elif analyzer_name == "webview_auditor":
+                from api.services.analyzers.webview_auditor import WebViewAuditor
+                analyzer = WebViewAuditor()
+            elif analyzer_name == "obfuscation_analyzer":
+                from api.services.analyzers.obfuscation_analyzer import ObfuscationAnalyzer
+                analyzer = ObfuscationAnalyzer()
+            elif analyzer_name == "deeplink_analyzer":
+                from api.services.analyzers.deeplink_analyzer import DeeplinkAnalyzer
+                analyzer = DeeplinkAnalyzer()
+            elif analyzer_name == "backup_analyzer":
+                from api.services.analyzers.backup_analyzer import BackupAnalyzer
+                analyzer = BackupAnalyzer()
+            elif analyzer_name == "component_security_analyzer":
+                from api.services.analyzers.component_security_analyzer import ComponentSecurityAnalyzer
+                analyzer = ComponentSecurityAnalyzer()
+            elif analyzer_name == "logging_analyzer":
+                from api.services.analyzers.logging_analyzer import LoggingAnalyzer
+                analyzer = LoggingAnalyzer()
+            elif analyzer_name == "permissions_analyzer":
+                from api.services.analyzers.permissions_analyzer import PermissionsAnalyzer
+                analyzer = PermissionsAnalyzer()
             else:
                 logger.warning(f"Unknown analyzer: {analyzer_name}")
                 return []
@@ -277,7 +423,12 @@ class ScanOrchestrator:
             return []
 
     def _count_findings(self) -> dict[str, int]:
-        """Count findings by severity."""
+        """Count accumulated findings grouped by severity level.
+
+        Returns:
+            Dictionary mapping severity strings (critical, high, medium, low, info)
+            to their respective counts.
+        """
         counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for finding in self.findings:
             if finding.severity in counts:
@@ -285,7 +436,16 @@ class ScanOrchestrator:
         return counts
 
     def _create_secret_from_finding(self, finding: Finding, scan: Scan) -> None:
-        """Create a Secret entry from a secret_scanner finding."""
+        """Create a Secret database entry from a secret_scanner finding.
+
+        Extracts the secret type, provider, and redacted value from the finding
+        metadata and creates a corresponding Secret record linked to the finding,
+        scan, and app. Used for the dedicated secrets inventory feature.
+
+        Args:
+            finding: A Finding with category "Secrets" from the secret_scanner analyzer.
+            scan: The parent Scan record for foreign key linkage.
+        """
         import hashlib
         import re
 

@@ -2,7 +2,7 @@
   <div class="app-detail-view">
     <div class="page-header">
       <div class="header-content">
-        <Button icon="pi pi-arrow-left" class="p-button-text" @click="$router.back()" />
+        <Button icon="pi pi-arrow-left" class="p-button-text" v-tooltip="'Go Back'" @click="$router.back()" />
         <div>
           <h1>{{ app?.app_name || app?.package_name || 'Application Details' }}</h1>
           <p class="text-secondary">{{ app?.package_name }}</p>
@@ -197,6 +197,21 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * AppDetailView - Single application detail page with security overview and scan controls.
+ *
+ * Features:
+ * - App identity card with platform, framework, and status tags
+ * - Security overview grid showing scan count and findings by severity
+ * - Technical details (package name, SDK versions, file size, SHA-256 hash)
+ * - Signing information display
+ * - Framework details (for cross-platform apps)
+ * - Findings by category bar chart
+ * - Scan initiation dialog and app deletion with confirmation
+ *
+ * @requires useAppsStore - fetches app details and per-app statistics
+ * @requires useScansStore - creates scans for the current application
+ */
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppsStore } from '@/stores/apps'

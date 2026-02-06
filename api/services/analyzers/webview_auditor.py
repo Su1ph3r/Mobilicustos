@@ -1,29 +1,90 @@
-"""
-WebView Security Auditor
+"""WebView security auditor for Android and iOS mobile applications.
 
-Analyzes mobile apps for WebView security vulnerabilities including:
-- JavaScript interface injection
-- Insecure WebView settings
-- SSL/TLS validation bypasses
-- File access permissions
-- Cross-origin issues
+Performs static analysis of decompiled source code to detect WebView
+security misconfigurations and vulnerabilities that can lead to code
+injection, data theft, and man-in-the-middle attacks.
+
+Security checks performed:
+    Android WebView:
+        - JavaScript enabled without trusted content sources
+        - JavaScript interface (addJavascriptInterface) exposure -- RCE
+          risk on Android < 4.2 (API 17)
+        - File access (setAllowFileAccess, setAllowFileAccessFromFileURLs,
+          setAllowUniversalAccessFromFileURLs)
+        - Mixed content mode (HTTP/HTTPS content mixing)
+        - WebView remote debugging enabled in production
+        - Deprecated settings (setSavePassword, setPluginState)
+
+    iOS WKWebView:
+        - Deprecated UIWebView usage (iOS 12+)
+        - JavaScript enabled and popup auto-open settings
+        - File URL cross-origin access
+        - Script message handler bridge security
+        - evaluateJavaScript with unsanitized input
+
+    SSL/TLS Bypass Detection:
+        - onReceivedSslError with proceed() (Android)
+        - Empty X509TrustManager (Android)
+        - didReceive challenge with useCredential (iOS)
+        - allowsAnyHTTPSCertificateForHost private API (iOS)
+
+    JavaScript Bridge Security:
+        - @JavascriptInterface annotated method exposure
+        - evaluateJavascript with string concatenation (injection risk)
+        - loadUrl with javascript: scheme (XSS vector)
+        - loadDataWithBaseURL with untrusted base URL
+
+    URL Handling:
+        - Insecure scheme loading (http://, intent://, file://)
+        - Intent-based URL loading (URL injection)
+        - shouldOverrideUrlLoading returning false for all URLs
+
+OWASP references:
+    - MASVS-PLATFORM: Platform Interaction
+    - MASVS-PLATFORM-2: WebView Security
+    - MASVS-NETWORK: Network Communication
+    - OWASP Mobile Top 10 M7: Client Code Quality
+    - CWE-79: Cross-site Scripting (XSS)
+    - CWE-295: Improper Certificate Validation
+    - CWE-749: Exposed Dangerous Method or Function
+    - CWE-346: Origin Validation Error
+    - CWE-489: Active Debug Code
+    - CWE-922: Insecure Storage of Sensitive Information
 """
 
+import os
 import re
 import logging
 from typing import Optional
-from uuid import uuid4
 
 from api.models.database import MobileApp, Finding
+from api.services.analyzers.base_analyzer import BaseAnalyzer
 
 logger = logging.getLogger(__name__)
 
 
-class WebViewAuditor:
-    """Analyzes WebView security in mobile apps."""
+class WebViewAuditor(BaseAnalyzer):
+    """Analyzes WebView security in Android and iOS mobile applications.
 
-    ANALYZER_NAME = "webview_auditor"
-    ANALYZER_VERSION = "1.0.0"
+    Extracts the application archive and scans decompiled source code
+    for WebView configuration anti-patterns, SSL/TLS certificate
+    validation bypasses, JavaScript bridge security issues, and
+    dangerous URL handling patterns.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform ("cross-platform").
+        ANDROID_WEBVIEW_ISSUES: Tuple patterns of (regex, name, severity,
+            description) for Android WebView security settings.
+        SSL_BYPASS_PATTERNS: Patterns for Android SSL validation bypass.
+        IOS_WEBVIEW_ISSUES: Patterns for iOS WKWebView/UIWebView issues.
+        IOS_SSL_BYPASS: Patterns for iOS SSL certificate bypass.
+        JS_BRIDGE_PATTERNS: Patterns for JavaScript bridge exposure.
+        DANGEROUS_URL_PATTERNS: Patterns for insecure URL loading.
+    """
+
+    name = "webview_auditor"
+    platform = "cross-platform"
 
     # Android WebView security issues
     ANDROID_WEBVIEW_ISSUES = [
@@ -114,20 +175,31 @@ class WebViewAuditor:
         (r'shouldOverrideUrlLoading.*return\s+false', "URL override returns false", "medium", "shouldOverrideUrlLoading returns false for all URLs. Review URL handling."),
     ]
 
-    async def analyze(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """
-        Analyze app for WebView security vulnerabilities.
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze the application for WebView security vulnerabilities.
 
         Args:
-            app: The mobile app being analyzed
-            extracted_path: Path to extracted app contents
+            app: The mobile application to analyze.
 
         Returns:
-            List of security findings
+            A list of Finding objects covering WebView configuration,
+            SSL bypass, JavaScript bridge, and URL handling issues.
         """
-        findings = []
+        if not app.file_path:
+            return []
 
+        import shutil
+        import tempfile
+        import zipfile
+
+        extracted_path = None
         try:
+            extracted_path = tempfile.mkdtemp(prefix="webview_audit_")
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
+
+            findings = []
+
             if app.platform == "android":
                 findings.extend(await self._analyze_android_webview(app, extracted_path))
             elif app.platform == "ios":
@@ -139,18 +211,34 @@ class WebViewAuditor:
             findings.extend(await self._analyze_url_handling(app, extracted_path))
 
             logger.info(f"WebViewAuditor found {len(findings)} issues in {app.app_id}")
+            return findings
 
         except Exception as e:
             logger.error(f"Error in WebViewAuditor: {e}")
-            findings.append(self._create_error_finding(app, str(e)))
-
-        return findings
+            return []
+        finally:
+            if extracted_path and os.path.exists(extracted_path):
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     async def _analyze_android_webview(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze Android WebView configuration."""
-        findings = []
+        """Analyze Android WebView configuration for security issues.
 
-        import os
+        Scans Java/Kotlin/Smali source files that reference WebView,
+        WebSettings, or WebViewClient for each pattern in
+        ANDROID_WEBVIEW_ISSUES. Also checks for addJavascriptInterface
+        exposure across all WebView files.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted APK.
+
+        Returns:
+            A list of Finding objects for Android WebView issues.
+        """
+        findings = []
 
         source_dirs = [
             os.path.join(extracted_path, "sources"),
@@ -235,10 +323,19 @@ class WebViewAuditor:
         return findings
 
     async def _analyze_ios_webview(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze iOS WKWebView configuration."""
-        findings = []
+        """Analyze iOS WKWebView and UIWebView configuration.
 
-        import os
+        Detects deprecated UIWebView usage, checks WKWebView security
+        settings, and scans for iOS-specific SSL bypass patterns.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted IPA.
+
+        Returns:
+            A list of Finding objects for iOS WebView issues.
+        """
+        findings = []
 
         for root, _, files in os.walk(extracted_path):
             for file in files:
@@ -313,10 +410,16 @@ class WebViewAuditor:
         return findings
 
     async def _analyze_ssl_bypass(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze SSL/TLS certificate validation bypass."""
-        findings = []
+        """Analyze SSL/TLS certificate validation bypass in source code.
 
-        import os
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted archive.
+
+        Returns:
+            A list of critical Finding objects for SSL bypass patterns.
+        """
+        findings = []
 
         extensions = ('.java', '.kt', '.smali') if app.platform == 'android' else ('.m', '.swift', '.mm')
 
@@ -359,10 +462,16 @@ class WebViewAuditor:
         return findings
 
     async def _analyze_js_bridge(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze JavaScript bridge security."""
-        findings = []
+        """Analyze JavaScript bridge security for native-to-JS exposure.
 
-        import os
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted archive.
+
+        Returns:
+            A list of Finding objects for JavaScript bridge issues.
+        """
+        findings = []
 
         extensions = ('.java', '.kt') if app.platform == 'android' else ('.m', '.swift')
 
@@ -402,10 +511,19 @@ class WebViewAuditor:
         return findings
 
     async def _analyze_url_handling(self, app: MobileApp, extracted_path: str) -> list[Finding]:
-        """Analyze URL handling in WebViews."""
-        findings = []
+        """Analyze URL handling in WebViews for insecure patterns.
 
-        import os
+        Detects insecure scheme loading (http://, intent://, file://),
+        intent-based URL injection, and permissive URL override behavior.
+
+        Args:
+            app: The mobile application being analyzed.
+            extracted_path: Root directory of the extracted archive.
+
+        Returns:
+            A list of Finding objects for URL handling issues.
+        """
+        findings = []
 
         extensions = ('.java', '.kt', '.smali') if app.platform == 'android' else ('.m', '.swift')
 
@@ -457,7 +575,15 @@ class WebViewAuditor:
         return '\n'.join(context_lines)
 
     def _get_cwe_for_issue(self, issue_name: str) -> str:
-        """Map issue names to CWE IDs."""
+        """Map WebView issue names to their corresponding CWE IDs.
+
+        Args:
+            issue_name: The short name of the WebView issue.
+
+        Returns:
+            The CWE identifier string (e.g., "CWE-79"). Falls back
+            to "CWE-693" (Protection Mechanism Failure) for unknown issues.
+        """
         cwe_map = {
             "JavaScript enabled": "CWE-79",
             "JavaScript interface exposed": "CWE-749",
@@ -494,104 +620,28 @@ class WebViewAuditor:
         cwe_id: Optional[str] = None,
         owasp_category: Optional[str] = None,
     ) -> Finding:
-        """Create a security finding."""
-
-        poc_verification = f"""1. Extract the app and locate WebView implementations
-2. Search for: {title.split(':')[-1].strip() if ':' in title else title}
-3. Verify the WebView configuration
-4. Test with a malicious webpage if applicable"""
-
-        poc_commands = []
-        if app.platform == "android":
-            poc_commands = [
-                f"apktool d {app.file_path} -o /tmp/extracted",
-                "grep -rn 'WebView\\|setJavaScriptEnabled\\|addJavascriptInterface' /tmp/extracted/",
-                "# Use drozer: run app.provider.query content://...",
-            ]
-        else:
-            poc_commands = [
-                f"unzip -o {app.file_path} -d /tmp/extracted",
-                "strings /tmp/extracted/Payload/*.app/* | grep -i 'WKWebView\\|UIWebView\\|javaScript'",
-                "# Use Frida to hook WKWebView configuration",
-            ]
-
-        frida_script = None
-        if "JavaScript" in title or "SSL" in title:
-            if app.platform == "android":
-                frida_script = """// Hook WebView JavaScript interface
-Java.perform(function() {
-    var WebView = Java.use('android.webkit.WebView');
-    WebView.addJavascriptInterface.implementation = function(obj, name) {
-        console.log('[+] addJavascriptInterface called');
-        console.log('    Interface name: ' + name);
-        console.log('    Object: ' + obj);
-        return this.addJavascriptInterface(obj, name);
-    };
-
-    var WebSettings = Java.use('android.webkit.WebSettings');
-    WebSettings.setJavaScriptEnabled.implementation = function(enabled) {
-        console.log('[+] setJavaScriptEnabled: ' + enabled);
-        return this.setJavaScriptEnabled(enabled);
-    };
-});"""
-            else:
-                frida_script = """// Hook WKWebView configuration
-var WKWebViewConfiguration = ObjC.classes.WKWebViewConfiguration;
-Interceptor.attach(WKWebViewConfiguration['- setPreferences:'].implementation, {
-    onEnter: function(args) {
-        console.log('[+] WKWebView setPreferences called');
-    }
-});
-
-var WKPreferences = ObjC.classes.WKPreferences;
-Interceptor.attach(WKPreferences['- setJavaScriptEnabled:'].implementation, {
-    onEnter: function(args) {
-        console.log('[+] setJavaScriptEnabled: ' + args[2]);
-    }
-});"""
-
-        return Finding(
-            finding_id=str(uuid4()),
-            app_id=app.app_id,
-            scan_id=None,
-            title=title,
-            description=description,
-            severity=severity,
-            category=category,
-            file_path=file_path,
-            line_number=line_number,
-            code_snippet=code_snippet,
-            cwe_id=cwe_id,
-            owasp_category=owasp_category,
-            cvss_score=self._calculate_cvss(severity),
-            tool=self.ANALYZER_NAME,
-            status="new",
-            poc_verification=poc_verification,
-            poc_commands=poc_commands,
-            frida_script=frida_script,
-        )
-
-    def _create_error_finding(self, app: MobileApp, error: str) -> Finding:
-        """Create an error finding when analysis fails."""
-        return Finding(
-            finding_id=str(uuid4()),
-            app_id=app.app_id,
-            scan_id=None,
-            title="WebView Analysis Error",
-            description=f"An error occurred during WebView security analysis: {error}",
-            severity="info",
-            category="MASVS-PLATFORM",
-            tool=self.ANALYZER_NAME,
-            status="new",
-        )
-
-    def _calculate_cvss(self, severity: str) -> float:
-        """Map severity to approximate CVSS score."""
-        severity_map = {
+        """Create a security finding using BaseAnalyzer.create_finding."""
+        severity_cvss_map = {
             "critical": 9.5,
             "high": 7.5,
             "medium": 5.5,
             "low": 3.5,
             "info": 0.0,
         }
-        return severity_map.get(severity, 0.0)
+
+        return self.create_finding(
+            app=app,
+            title=title,
+            description=description,
+            severity=severity,
+            category=category,
+            impact="WebView security misconfigurations can lead to code injection, data theft, or MITM attacks.",
+            remediation="Review WebView security settings and ensure proper content validation.",
+            file_path=file_path,
+            line_number=line_number,
+            code_snippet=code_snippet,
+            cwe_id=cwe_id,
+            cvss_score=severity_cvss_map.get(severity, 0.0),
+            owasp_masvs_category="MASVS-PLATFORM",
+            owasp_masvs_control="MASVS-PLATFORM-2",
+        )

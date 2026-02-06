@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
-from api.models.database import MobileApp, Scan
+from api.models.database import Finding, MobileApp, Scan
 from api.models.schemas import PaginatedResponse, ScanCreate, ScanResponse
 from api.services.scan_orchestrator import run_scan
 
@@ -54,6 +54,68 @@ async def list_scans(
         page_size=page_size,
         pages=(total + page_size - 1) // page_size,
     )
+
+
+@router.delete("/purge/{app_id}")
+async def purge_scans(app_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete ALL scans (and cascade-delete findings) for a given app_id."""
+    result = await db.execute(
+        select(Scan).where(Scan.app_id == app_id)
+    )
+    scans = result.scalars().all()
+
+    if not scans:
+        raise HTTPException(status_code=404, detail="No scans found for this app")
+
+    # Block if any scan is currently running
+    running = [s for s in scans if s.status == "running"]
+    if running:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot purge: {len(running)} scan(s) still running. Cancel them first.",
+        )
+
+    deleted_count = len(scans)
+    for scan in scans:
+        await db.delete(scan)
+
+    await db.commit()
+
+    return {"message": f"Purged {deleted_count} scans", "deleted_count": deleted_count}
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_scans(
+    scan_ids: list[UUID],
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk delete selected scans and their associated findings."""
+    if not scan_ids:
+        raise HTTPException(status_code=422, detail="No scan IDs provided")
+
+    result = await db.execute(
+        select(Scan).where(Scan.scan_id.in_(scan_ids))
+    )
+    scans = result.scalars().all()
+
+    if not scans:
+        raise HTTPException(status_code=404, detail="No scans found")
+
+    # Block if any selected scan is running
+    running = [s for s in scans if s.status == "running"]
+    if running:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete {len(running)} running scan(s). Cancel them first.",
+        )
+
+    deleted_count = len(scans)
+    for scan in scans:
+        await db.delete(scan)
+
+    await db.commit()
+
+    return {"message": f"Deleted {deleted_count} scans", "deleted_count": deleted_count}
 
 
 @router.get("/{scan_id}", response_model=ScanResponse)

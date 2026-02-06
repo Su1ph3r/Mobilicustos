@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @router.get("/findings/{app_id}")
 async def export_findings(
     app_id: str,
-    format: str = Query("json", pattern="^(json|csv|sarif)$"),
+    format: str = Query("json", pattern="^(json|csv|sarif|html|pdf)$"),
     severity: list[str] | None = Query(None),
     status: list[str] | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -61,6 +61,10 @@ async def export_findings(
         return _export_csv(app, findings)
     elif format == "sarif":
         return _export_sarif(app, findings)
+    elif format == "html":
+        return _export_findings_html(app, findings)
+    elif format == "pdf":
+        return _export_findings_pdf(app, findings)
 
 
 def _export_json(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
@@ -233,6 +237,259 @@ def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingRe
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        },
+    )
+
+
+def _export_findings_html(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
+    """Export findings as a styled HTML document."""
+    from html import escape
+
+    app_name = escape(app.app_name or app.package_name) if app else "All Applications"
+    title = f"Security Findings - {app_name}"
+
+    # Severity summary counts
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for f in findings:
+        if f.severity in counts:
+            counts[f.severity] += 1
+
+    # Build findings table rows
+    findings_rows = ""
+    for f in findings:
+        sev = escape(f.severity or "")
+        sev_color = {
+            "critical": "#dc2626", "high": "#ea580c",
+            "medium": "#ca8a04", "low": "#2563eb", "info": "#6b7280",
+        }.get(sev, "#6b7280")
+
+        findings_rows += f"""<tr>
+            <td><span style="background:{sev_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;">{escape(sev.upper())}</span></td>
+            <td>{escape(f.title or '')}</td>
+            <td>{escape(f.category or '')}</td>
+            <td>{escape(f.cwe_id or '')}</td>
+            <td>{escape(f.status or '')}</td>
+        </tr>"""
+
+    # Build detailed findings
+    detailed_findings = ""
+    for i, f in enumerate(findings, 1):
+        sev = f.severity or "info"
+        sev_color = {
+            "critical": "#dc2626", "high": "#ea580c",
+            "medium": "#ca8a04", "low": "#2563eb", "info": "#6b7280",
+        }.get(sev, "#6b7280")
+
+        file_info = ""
+        if f.file_path:
+            file_info = f"<p><strong>File:</strong> {escape(f.file_path)}"
+            if f.line_number:
+                file_info += f" (line {f.line_number})"
+            file_info += "</p>"
+
+        poc = ""
+        if f.poc_evidence:
+            poc = f"<p><strong>Evidence:</strong></p><pre>{escape(f.poc_evidence)}</pre>"
+
+        code = ""
+        if f.code_snippet:
+            code = f"<p><strong>Code:</strong></p><pre>{escape(f.code_snippet)}</pre>"
+
+        detailed_findings += f"""
+        <div style="border:1px solid #e5e7eb;border-left:4px solid {sev_color};border-radius:4px;padding:16px;margin-bottom:16px;">
+            <h3 style="margin:0 0 8px;">{i}. {escape(f.title or '')}</h3>
+            <p><span style="background:{sev_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;">{escape(sev.upper())}</span>
+               <span style="margin-left:8px;color:#6b7280;">{escape(f.category or '')}</span>
+               {' | CWE: ' + escape(f.cwe_id) if f.cwe_id else ''}
+               {' | CVSS: ' + str(float(f.cvss_score)) if f.cvss_score else ''}
+            </p>
+            <p><strong>Description:</strong> {escape(f.description or '')}</p>
+            <p><strong>Impact:</strong> {escape(f.impact or '')}</p>
+            <p><strong>Remediation:</strong> {escape(f.remediation or '')}</p>
+            {file_info}{poc}{code}
+        </div>"""
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{escape(title)}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
+h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }}
+h2 {{ color: #374151; margin-top: 32px; }}
+table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
+th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }}
+th {{ background: #f9fafb; font-weight: 600; }}
+pre {{ background: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 13px; }}
+.summary-grid {{ display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }}
+.summary-card {{ flex: 1; min-width: 100px; padding: 16px; border-radius: 8px; text-align: center; }}
+.summary-card .count {{ font-size: 28px; font-weight: 700; }}
+.summary-card .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }}
+</style>
+</head>
+<body>
+<h1>{escape(title)}</h1>
+<p style="color:#6b7280;">Exported: {datetime.utcnow().isoformat()}</p>
+
+<h2>Summary</h2>
+<div class="summary-grid">
+<div class="summary-card" style="background:#fef2f2;"><div class="count" style="color:#dc2626;">{counts['critical']}</div><div class="label" style="color:#dc2626;">Critical</div></div>
+<div class="summary-card" style="background:#fff7ed;"><div class="count" style="color:#ea580c;">{counts['high']}</div><div class="label" style="color:#ea580c;">High</div></div>
+<div class="summary-card" style="background:#fefce8;"><div class="count" style="color:#ca8a04;">{counts['medium']}</div><div class="label" style="color:#ca8a04;">Medium</div></div>
+<div class="summary-card" style="background:#eff6ff;"><div class="count" style="color:#2563eb;">{counts['low']}</div><div class="label" style="color:#2563eb;">Low</div></div>
+<div class="summary-card" style="background:#f9fafb;"><div class="count" style="color:#6b7280;">{counts['info']}</div><div class="label" style="color:#6b7280;">Info</div></div>
+</div>
+<p><strong>Total findings:</strong> {len(findings)}</p>
+
+<h2>Findings Overview</h2>
+<table>
+<thead><tr><th>Severity</th><th>Title</th><th>Category</th><th>CWE</th><th>Status</th></tr></thead>
+<tbody>{findings_rows}</tbody>
+</table>
+
+<h2>Detailed Findings</h2>
+{detailed_findings}
+
+<hr style="margin-top:40px;">
+<p style="color:#9ca3af;font-size:12px;text-align:center;">Generated by Mobilicustos Security Assessment Platform</p>
+</body>
+</html>"""
+
+    filename = f"{app.package_name}_findings.html" if app else "all_findings.html"
+    return StreamingResponse(
+        io.BytesIO(html_content.encode()),
+        media_type="text/html",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        },
+    )
+
+
+def _export_findings_pdf(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
+    """Export findings as a PDF document."""
+    from fpdf import FPDF
+
+    app_name = (app.app_name or app.package_name) if app else "All Applications"
+
+    class FindingsPDF(FPDF):
+        def header(self):
+            self.set_font("Helvetica", "B", 10)
+            self.set_text_color(100, 100, 100)
+            self.cell(0, 8, "Mobilicustos Security Findings", align="R")
+            self.ln(12)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font("Helvetica", "I", 8)
+            self.set_text_color(150, 150, 150)
+            self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
+
+    pdf = FindingsPDF()
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(17, 24, 39)
+    pdf.cell(0, 14, f"Security Findings - {app_name}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(107, 114, 128)
+    pdf.cell(0, 8, f"Exported: {datetime.utcnow().isoformat()}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(6)
+
+    # Summary
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for f in findings:
+        if f.severity in counts:
+            counts[f.severity] += 1
+
+    sev_colors = {
+        "critical": (220, 38, 38), "high": (234, 88, 12),
+        "medium": (202, 138, 4), "low": (37, 99, 235), "info": (107, 114, 128),
+    }
+
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(55, 65, 81)
+    pdf.cell(0, 10, "Summary", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(59, 130, 246)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(31, 41, 55)
+    pdf.cell(0, 8, f"Total Findings: {len(findings)}", new_x="LMARGIN", new_y="NEXT")
+    for sev_name in ["critical", "high", "medium", "low", "info"]:
+        r, g, b = sev_colors[sev_name]
+        pdf.set_text_color(r, g, b)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(30, 7, f"  {sev_name.upper()}:")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 7, str(counts.get(sev_name, 0)), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(31, 41, 55)
+    pdf.ln(6)
+
+    # Findings
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(55, 65, 81)
+    pdf.cell(0, 10, "Findings", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(59, 130, 246)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(4)
+
+    for i, f in enumerate(findings, 1):
+        if pdf.get_y() > 250:
+            pdf.add_page()
+
+        sev = f.severity or "info"
+        r, g, b = sev_colors.get(sev, (107, 114, 128))
+
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(31, 41, 55)
+        title_text = (f.title or "")[:80]
+        pdf.cell(0, 8, f"{i}. {title_text}", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(r, g, b)
+        pdf.cell(25, 6, sev.upper())
+        pdf.set_text_color(107, 114, 128)
+        pdf.set_font("Helvetica", "", 9)
+        meta = f.category or ""
+        if f.cwe_id:
+            meta += f" | {f.cwe_id}"
+        if f.cvss_score:
+            meta += f" | CVSS: {float(f.cvss_score)}"
+        pdf.cell(0, 6, meta, new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_text_color(55, 65, 81)
+        pdf.set_font("Helvetica", "", 9)
+        desc = (f.description or "")[:500]
+        if desc:
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(w=0, h=5, text=desc, new_x="LMARGIN", new_y="NEXT")
+
+        impact = (f.impact or "")[:300]
+        if impact:
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(w=0, h=5, text=f"Impact: {impact}", new_x="LMARGIN", new_y="NEXT")
+
+        rem = (f.remediation or "")[:300]
+        if rem:
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(w=0, h=5, text=f"Remediation: {rem}", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(4)
+
+    pdf_bytes = pdf.output()
+    filename = f"{app.package_name}_findings.pdf" if app else "all_findings.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
         headers={
             "Content-Disposition": f"attachment; filename={filename}"
         },

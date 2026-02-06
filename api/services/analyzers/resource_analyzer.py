@@ -1,4 +1,19 @@
-"""Resource analyzer for Android APK res/ and assets/ directories."""
+"""Resource and asset analyzer for Android APK ``res/`` and ``assets/`` directories.
+
+Scans APK resources and assets for sensitive files (private keys, keystores,
+databases, configuration files) and hardcoded secrets embedded in resource
+files (strings.xml, JSON configs).
+
+Security checks:
+    - Private key files (.pem, .key, .p12, .pfx, .jks, .keystore)
+    - Certificate files (.cer, .crt)
+    - Database files (.db, .sqlite)
+    - Configuration files with secrets (google-services.json, strings.xml)
+
+OWASP references:
+    - CWE-798: Use of Hard-coded Credentials
+    - MASVS-STORAGE-1, MSTG-STORAGE-12
+"""
 
 import json
 import logging

@@ -1,4 +1,26 @@
-"""React Native analyzer using hermes-dec for Hermes bytecode."""
+"""React Native analyzer for Hermes bytecode decompilation and security analysis.
+
+Performs specialized analysis of React Native applications by extracting
+the Hermes bytecode bundle, running hermes-dec decompilation via Docker
+container, and scanning the recovered JavaScript source for security
+vulnerabilities.
+
+Analysis pipeline:
+    1. **Bundle Extraction**: Locates and extracts index.android.bundle
+       (Android) or main.jsbundle (iOS) from the application archive.
+    2. **Hermes Decompilation**: Runs hermes-dec on the extracted bytecode
+       via a Docker sibling container to recover JavaScript source.
+    3. **Security Analysis**: Scans decompiled JavaScript for hardcoded
+       secrets, API endpoints, insecure storage usage, and dynamic code
+       execution patterns.
+    4. **Configuration Checks**: Detects development/debug builds via
+       __DEV__ flag presence and React DevTools indicators.
+
+OWASP references:
+    - MASVS-CODE: Code Quality
+    - MASVS-STORAGE: Data Storage (secrets in bundle)
+    - MASVS-RESILIENCE: Resiliency Against Reverse Engineering
+"""
 
 import asyncio
 import json
@@ -17,7 +39,17 @@ logger = logging.getLogger(__name__)
 
 
 class ReactNativeAnalyzer(BaseAnalyzer):
-    """Analyzes React Native applications."""
+    """Analyzes React Native applications via Hermes bytecode decompilation.
+
+    Extracts the JavaScript bundle, runs hermes-dec via Docker, and
+    scans the recovered source for security issues including hardcoded
+    secrets, API endpoints, and debug mode indicators.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform ("cross-platform").
+        docker: DockerExecutor instance for running hermes-dec containers.
+    """
 
     name = "react_native_analyzer"
     platform = "cross-platform"
@@ -26,7 +58,19 @@ class ReactNativeAnalyzer(BaseAnalyzer):
         self.docker = DockerExecutor()
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze a React Native application."""
+        """Analyze a React Native application for security issues.
+
+        Skips non-React-Native apps. Extracts the JS bundle, runs
+        hermes-dec decompilation, and scans the output.
+
+        Args:
+            app: The mobile application to analyze. Must have
+                framework="react_native" for full analysis.
+
+        Returns:
+            A list of Finding objects from bundle analysis and
+            configuration checks.
+        """
         findings: list[Finding] = []
 
         if not app.file_path or app.framework != "react_native":

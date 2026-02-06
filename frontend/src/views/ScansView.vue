@@ -27,9 +27,30 @@
       </div>
     </div>
 
+    <!-- Bulk Actions -->
+    <div class="card bulk-actions-card" v-if="selectedScans.length > 0 || true">
+      <div class="bulk-actions-row">
+        <Button
+          v-if="selectedScans.length > 0"
+          :label="`Delete Selected (${selectedScans.length})`"
+          icon="pi pi-trash"
+          severity="danger"
+          outlined
+          @click="confirmBulkDelete"
+        />
+        <Button
+          label="Delete All Scans"
+          icon="pi pi-trash"
+          severity="danger"
+          @click="confirmPurgeScans"
+        />
+      </div>
+    </div>
+
     <!-- Scans Table -->
     <div class="card">
       <DataTable
+        v-model:selection="selectedScans"
         :value="scansStore.scans"
         :loading="scansStore.loading"
         responsiveLayout="scroll"
@@ -38,7 +59,9 @@
         :totalRecords="scansStore.pagination.total"
         :lazy="true"
         @page="onPage"
+        dataKey="scan_id"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="scan_id" header="Scan ID">
           <template #body="{ data }">
             <router-link :to="`/scans/${data.scan_id}`" class="scan-link">
@@ -146,8 +169,23 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * ScansView - Scan management view with status tracking, bulk operations, and auto-refresh.
+ *
+ * Features:
+ * - Paginated, selectable data table of all scans
+ * - Status and scan-type dropdown filters
+ * - Per-severity finding badges inline with each scan row
+ * - Cancel running scans and refresh individual scan progress
+ * - Bulk delete selected scans and purge all scans per app
+ * - 5-second auto-refresh interval for running scans
+ *
+ * @requires useScansStore - fetches, filters, cancels, and deletes scans
+ * @requires scansApi - bulk delete and purge endpoints
+ */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useScansStore, type Scan } from '@/stores/scans'
+import { scansApi } from '@/services/api'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import DataTable from 'primevue/datatable'
@@ -165,6 +203,7 @@ const toast = useToast()
 
 const selectedStatus = ref<string | null>(null)
 const selectedScanType = ref<string | null>(null)
+const selectedScans = ref<Scan[]>([])
 
 let refreshInterval: number | null = null
 
@@ -250,6 +289,53 @@ function confirmDelete(scan: Scan) {
   })
 }
 
+function confirmBulkDelete() {
+  const scanIds = selectedScans.value.map((s) => s.scan_id)
+  confirm.require({
+    message: `Are you sure you want to delete ${scanIds.length} selected scan(s) and their findings? This action cannot be undone.`,
+    header: 'Delete Selected Scans',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        const response = await scansApi.bulkDelete(scanIds)
+        toast.add({ severity: 'success', summary: 'Deleted', detail: response.data.message, life: 3000 })
+        selectedScans.value = []
+        scansStore.fetchScans()
+      } catch (e: any) {
+        const detail = e.response?.data?.detail || 'Failed to delete scans'
+        toast.add({ severity: 'error', summary: 'Error', detail, life: 3000 })
+      }
+    },
+  })
+}
+
+function confirmPurgeScans() {
+  // Determine the app_id from filters or from all scans
+  const appId = scansStore.filters.app_id
+  if (!appId) {
+    toast.add({ severity: 'warn', summary: 'Warning', detail: 'Please filter by an application first to purge all its scans', life: 3000 })
+    return
+  }
+  confirm.require({
+    message: `Are you sure you want to delete ALL scans for app ${appId.substring(0, 8)}...? This will also delete all associated findings. This action cannot be undone.`,
+    header: 'Delete All Scans',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        const response = await scansApi.purge(appId)
+        toast.add({ severity: 'success', summary: 'Purged', detail: response.data.message, life: 3000 })
+        selectedScans.value = []
+        scansStore.fetchScans()
+      } catch (e: any) {
+        const detail = e.response?.data?.detail || 'Failed to purge scans'
+        toast.add({ severity: 'error', summary: 'Error', detail, life: 3000 })
+      }
+    },
+  })
+}
+
 function startAutoRefresh() {
   refreshInterval = window.setInterval(async () => {
     const runningScans = scansStore.scans.filter((s) => s.status === 'running')
@@ -305,6 +391,16 @@ onUnmounted(() => {
 .filters-row {
   display: flex;
   gap: 1rem;
+}
+
+.bulk-actions-card {
+  padding: 0.75rem 1rem;
+}
+
+.bulk-actions-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
 }
 
 .scan-link,

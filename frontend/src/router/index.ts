@@ -1,5 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+/**
+ * Application router configuration using HTML5 history mode.
+ *
+ * Routes are lazy-loaded via dynamic imports for code splitting.
+ * Covers all primary views: dashboard, apps, scans, findings, devices,
+ * Frida, Drozer, Objection, compliance, attack paths, secrets,
+ * scheduled scans, webhooks, Burp Suite, bypass, API endpoints, and settings.
+ */
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -87,6 +95,21 @@ const router = createRouter({
       path: '/burp',
       name: 'burp',
       component: () => import('@/views/BurpView.vue'),
+    },
+    {
+      path: '/bypass',
+      name: 'bypass',
+      component: () => import('@/views/BypassView.vue'),
+    },
+    {
+      path: '/api-endpoints',
+      name: 'api-endpoints',
+      component: () => import('@/views/APIEndpointsView.vue'),
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/SettingsView.vue'),
     },
   ],
 })

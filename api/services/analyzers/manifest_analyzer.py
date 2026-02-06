@@ -1,4 +1,30 @@
-"""Android manifest analyzer."""
+"""Android manifest security analyzer.
+
+Parses and analyzes the ``AndroidManifest.xml`` from APK files to detect
+security misconfigurations and vulnerabilities. Uses androguard for binary
+XML decoding.
+
+Security checks performed:
+    - **Debuggable flag** (CWE-489, MASVS-RESILIENCE-4): Application allows
+      debugger attachment in release builds.
+    - **Backup enabled** (CWE-530, MASVS-STORAGE-2): Application data can be
+      extracted via ``adb backup``.
+    - **Exported components** (CWE-926, MASVS-PLATFORM-1): Activities, services,
+      receivers, or providers exported without permission protection.
+    - **Deep links** (MASVS-PLATFORM-2): Custom URL schemes susceptible to
+      hijacking by malicious apps.
+    - **Clear text traffic** (CWE-319, MASVS-NETWORK-1): HTTP traffic allowed
+      instead of enforcing HTTPS.
+    - **Dangerous permissions** (MASVS-PRIVACY-1): Requests for runtime
+      permissions that access sensitive user data.
+    - **Task hijacking** (CWE-1021, MASVS-PLATFORM): Activities using
+      singleTask/singleInstance launch modes without taskAffinity.
+
+OWASP references:
+    - OWASP MASVS: MASVS-RESILIENCE, MASVS-STORAGE, MASVS-PLATFORM,
+      MASVS-NETWORK, MASVS-PRIVACY
+    - OWASP MASTG: MASTG-TEST-0008, MASTG-TEST-0024, MASTG-TEST-0039
+"""
 
 import logging
 import zipfile
@@ -15,13 +41,34 @@ NS = {"android": "http://schemas.android.com/apk/res/android"}
 
 
 class ManifestAnalyzer(BaseAnalyzer):
-    """Analyzes AndroidManifest.xml for security issues."""
+    """Analyzes AndroidManifest.xml for security misconfigurations.
+
+    Extracts the binary XML manifest from APK files using androguard,
+    parses it into an ElementTree, and runs a suite of security checks.
+    Each check produces one or more ``Finding`` objects with detailed
+    descriptions, PoC commands, remediation guidance, and OWASP/CWE mappings.
+
+    Attributes:
+        name: Analyzer identifier used in scan configuration and logging.
+        platform: Target platform (``"android"`` only).
+    """
 
     name = "manifest_analyzer"
     platform = "android"
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze the Android manifest."""
+        """Run all manifest security checks against the target application.
+
+        Extracts ``AndroidManifest.xml`` from the APK, decodes the binary XML,
+        and executes each check method sequentially.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` pointing to the APK.
+
+        Returns:
+            List of Finding objects for all detected issues. Returns an empty
+            list if the file path is missing or manifest extraction fails.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -49,7 +96,18 @@ class ManifestAnalyzer(BaseAnalyzer):
         return findings
 
     async def _extract_manifest(self, apk_path: Path) -> str | None:
-        """Extract and decode AndroidManifest.xml."""
+        """Extract and decode the binary AndroidManifest.xml from an APK.
+
+        Uses androguard's ``AXMLPrinter`` to decode Android's binary XML
+        format into a standard XML string suitable for ElementTree parsing.
+
+        Args:
+            apk_path: Filesystem path to the APK file.
+
+        Returns:
+            Decoded XML string, or None if androguard is not installed or
+            extraction fails.
+        """
         try:
             # androguard 4.x uses different import paths
             from androguard.core.axml import AXMLPrinter
@@ -70,7 +128,13 @@ class ManifestAnalyzer(BaseAnalyzer):
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check if android:debuggable is true."""
+        """Check if ``android:debuggable`` is set to true.
+
+        A debuggable application allows JDWP debugger attachment, enabling
+        runtime inspection and modification of application state.
+
+        Maps to: CWE-489, MASVS-RESILIENCE-4, MASTG-TEST-0039.
+        """
         findings = []
         application = root.find("application")
 
@@ -166,7 +230,14 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check if backups are enabled."""
+        """Check if ``android:allowBackup`` permits ADB data extraction.
+
+        If not explicitly set to ``false``, Android defaults to allowing
+        backup (API < 31), enabling extraction of SharedPreferences,
+        databases, and internal files via ``adb backup``.
+
+        Maps to: CWE-530, MASVS-STORAGE-2, MASTG-TEST-0008.
+        """
         findings = []
         application = root.find("application")
 
@@ -252,7 +323,15 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check for exported components without permissions."""
+        """Check for exported components (activities, services, receivers,
+        providers) that lack permission protection.
+
+        Exported components without ``android:permission`` can be invoked
+        by any application on the device, potentially exposing sensitive
+        functionality or data.
+
+        Maps to: CWE-926, MASVS-PLATFORM-1, MASTG-TEST-0024.
+        """
         findings = []
         component_types = ["activity", "service", "receiver", "provider"]
 
@@ -393,7 +472,14 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check for insecure deep link configurations."""
+        """Check for custom URL scheme deep links that can be hijacked.
+
+        Custom URL schemes (non-http/https) can be registered by any app,
+        allowing malicious apps to intercept links intended for this
+        application.
+
+        Maps to: MASVS-PLATFORM-2.
+        """
         findings = []
 
         for activity in root.iter("activity"):
@@ -443,7 +529,13 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check if clear text traffic is allowed."""
+        """Check if ``android:usesCleartextTraffic`` allows HTTP connections.
+
+        When set to true, the application can make unencrypted HTTP requests,
+        exposing network traffic to interception and tampering.
+
+        Maps to: CWE-319, MASVS-NETWORK-1.
+        """
         findings = []
         application = root.find("application")
 
@@ -483,7 +575,14 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check for dangerous permissions."""
+        """Check for dangerous runtime permissions that access sensitive data.
+
+        Identifies requests for permissions such as READ_CONTACTS, CAMERA,
+        RECORD_AUDIO, ACCESS_FINE_LOCATION, etc. that require user consent
+        and grant access to personal information.
+
+        Maps to: MASVS-PRIVACY-1.
+        """
         findings = []
 
         dangerous_permissions = {
@@ -542,7 +641,15 @@ Java.perform(function() {{
         app: MobileApp,
         root: ET.Element,
     ) -> list[Finding]:
-        """Check for task hijacking vulnerabilities."""
+        """Check for StrandHogg-style task hijacking vulnerabilities.
+
+        Activities using ``singleTask`` or ``singleInstance`` launch mode
+        without an explicit empty ``taskAffinity`` may be vulnerable to task
+        hijacking, where a malicious app inserts phishing UI into the
+        target's task stack.
+
+        Maps to: CWE-1021, MASVS-PLATFORM.
+        """
         findings = []
 
         for activity in root.iter("activity"):

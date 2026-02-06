@@ -1,9 +1,26 @@
-"""Dependency Vulnerability Scanner.
+"""Dependency vulnerability scanner for mobile application supply chain analysis.
 
-Analyzes app dependencies for known vulnerabilities by parsing
-build.gradle, Podfile, package.json, and pubspec.yaml files.
+Analyzes application dependencies for known vulnerabilities by:
 
-Enhanced with library fingerprinting and comprehensive CVE detection.
+    1. **Dependency file parsing**: Extracts version-pinned dependencies from
+       build.gradle/build.gradle.kts (Android/Maven), Podfile/Podfile.lock
+       (iOS/CocoaPods), package.json (React Native/Cordova/npm), and
+       pubspec.yaml/pubspec.lock (Flutter/Pub).
+
+    2. **Vulnerability database lookup**: Queries the OSV (Open Source
+       Vulnerabilities) API for each dependency to find known CVEs with
+       severity ratings, affected version ranges, and fix versions.
+
+    3. **Library fingerprinting**: Uses the ``LibraryFingerprinter`` to detect
+       native libraries and SDKs embedded in the binary that may not appear
+       in manifest dependency files.
+
+Vulnerability severity is determined from CVSS v3 scores in OSV data,
+with fallback to database-specific severity fields.
+
+OWASP references:
+    - CWE-1395: Dependency on Vulnerable Third-Party Component
+    - MASVS-CODE, MSTG-CODE-5
 """
 
 import asyncio
@@ -153,7 +170,7 @@ class DependencyAnalyzer(BaseAnalyzer):
         # Convert AnalyzerResults to Findings
         findings = []
         for result in results:
-            finding = self.result_to_finding(result, app)
+            finding = self.result_to_finding(app, result)
             findings.append(finding)
 
         return findings
@@ -392,7 +409,7 @@ class DependencyAnalyzer(BaseAnalyzer):
             cwe_name="Dependency on Vulnerable Third-Party Component",
             owasp_masvs_category="MASVS-CODE",
             owasp_masvs_control="MSTG-CODE-5",
-            risk_score=8.0 if highest_severity.severity == "critical" else 6.0,
+            cvss_score=8.0 if highest_severity.severity == "critical" else 6.0,
             metadata={
                 "dependency_name": dep.name,
                 "dependency_version": dep.version,
@@ -436,7 +453,7 @@ class DependencyAnalyzer(BaseAnalyzer):
             cwe_name="Dependency on Vulnerable Third-Party Component",
             owasp_masvs_category="MASVS-CODE",
             owasp_masvs_control="MSTG-CODE-5",
-            risk_score=9.0 if critical_count > 0 else 7.0,
+            cvss_score=9.0 if critical_count > 0 else 7.0,
             metadata={
                 "total_vulnerable_packages": len(vulnerable_deps),
                 "total_vulnerabilities": total_vulns,

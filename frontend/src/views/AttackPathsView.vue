@@ -146,8 +146,8 @@
 
           <!-- Actions -->
           <div class="path-actions">
-            <Button label="Export Path" icon="pi pi-download" class="p-button-secondary" @click="exportPath" />
-            <Button label="Delete" icon="pi pi-trash" class="p-button-danger p-button-text" @click="confirmDelete" />
+            <Button label="Export Path" icon="pi pi-download" class="p-button-secondary" v-tooltip.top="'Export as JSON'" @click="exportPath" />
+            <Button label="Delete" icon="pi pi-trash" class="p-button-danger p-button-text" v-tooltip.top="'Delete this attack path'" @click="confirmDelete" />
           </div>
         </div>
       </div>
@@ -159,6 +159,19 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * AttackPathsView - Attack chain visualization and analysis across vulnerabilities.
+ *
+ * Features:
+ * - Per-app attack path listing with risk level and score
+ * - Detailed attack chain step-by-step visualization with typed step cards
+ * - Impact assessment bars for confidentiality, integrity, and availability
+ * - Related findings table linked to each attack path
+ * - Attack path generation, JSON export, and deletion
+ *
+ * @requires attackPathsApi - list, get, generate, delete, and findings endpoints
+ * @requires useAppsStore - provides the application list for selection
+ */
 import { ref, computed, onMounted } from 'vue'
 import { useAppsStore } from '@/stores/apps'
 import { attackPathsApi } from '@/services/api'

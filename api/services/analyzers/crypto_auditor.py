@@ -1,7 +1,34 @@
-"""Cryptographic Audit Analyzer.
+"""Cryptographic audit analyzer for mobile application security.
 
-Comprehensive analysis of cryptographic operations including
-weak algorithms, hardcoded keys, improper IV usage, and more.
+Performs comprehensive static analysis of cryptographic operations found
+in decompiled mobile application source code. Detects weak algorithms,
+hardcoded cryptographic keys, insecure random number generation, and
+improper initialization vector (IV) usage.
+
+Security checks performed:
+    - **Weak Algorithm Detection**: Identifies deprecated or broken
+      algorithms (DES, 3DES, RC2, RC4, MD5, SHA1, ECB mode) and
+      insufficient RSA key sizes (< 2048 bits).
+    - **Hardcoded Key Detection**: Finds cryptographic keys embedded
+      as hex strings, Base64 strings, or byte array literals.
+    - **Insecure Random Number Generation**: Detects use of
+      java.util.Random, Math.random(), and other non-cryptographic
+      PRNGs in security-sensitive contexts.
+    - **IV/Nonce Issues**: Identifies static or zero-value IVs in
+      symmetric encryption operations (IvParameterSpec, GCMParameterSpec).
+
+OWASP references:
+    - MASVS-CRYPTO: Cryptography Requirements
+    - MSTG-CRYPTO-1 through MSTG-CRYPTO-6
+    - CWE-327: Use of a Broken or Risky Cryptographic Algorithm
+    - CWE-321: Use of Hard-coded Cryptographic Key
+    - CWE-330: Use of Insufficiently Random Values
+    - CWE-329: Generation of Predictable IV with CBC Mode
+
+Platform support:
+    - Android: javax.crypto, java.security, Android KeyStore patterns
+    - iOS: CommonCrypto, Security.framework, CryptoKit patterns
+    - Cross-platform: JavaScript/TypeScript, Dart (Flutter) patterns
 """
 
 import logging
@@ -9,7 +36,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from api.models.database import MobileApp
+from api.models.database import Finding, MobileApp
 from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
 
 logger = logging.getLogger(__name__)
@@ -132,114 +159,178 @@ IV_PATTERNS = [
 
 
 class CryptoAuditor(BaseAnalyzer):
-    """Audits cryptographic implementations for security issues."""
+    """Audits cryptographic implementations for security vulnerabilities.
+
+    Extracts the application archive, scans all source files for
+    cryptographic API usage, evaluates algorithm strength, detects
+    hardcoded key material, identifies insecure random number generators,
+    and checks for static or predictable initialization vectors.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        description: Human-readable description of analyzer purpose.
+    """
 
     name = "crypto_auditor"
     description = "Analyzes cryptographic operations for weak algorithms and implementation issues"
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
-        """Analyze cryptographic operations."""
-        results = []
-        operations: list[CryptoOperation] = []
-        hardcoded_keys = []
-        insecure_random = []
-        iv_issues = []
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze cryptographic operations in the application.
 
-        # Determine source extensions based on platform
-        if app.platform == "android":
-            extensions = [".java", ".kt", ".smali"]
-            patterns = CRYPTO_PATTERNS["android"]
-        else:
-            extensions = [".swift", ".m", ".mm", ".h"]
-            patterns = CRYPTO_PATTERNS["ios"]
+        Extracts the application archive to a temporary directory, scans
+        source files for cryptographic API calls, evaluates each operation
+        against known-weak algorithms and implementation anti-patterns, and
+        produces categorized findings.
 
-        # Add common extensions
-        extensions.extend([".js", ".ts", ".dart"])
+        Args:
+            app: The mobile application to analyze, with file_path pointing
+                to the APK or IPA archive.
 
-        for ext in extensions:
-            for source_file in extracted_path.rglob(f"*{ext}"):
-                try:
-                    content = source_file.read_text(errors='ignore')
-                    rel_path = str(source_file.relative_to(extracted_path))
+        Returns:
+            A list of Finding objects covering weak algorithms, hardcoded
+            keys, insecure random usage, IV/nonce issues, and a summary
+            of all detected cryptographic operations.
+        """
+        if not app.file_path:
+            return []
 
-                    # Find crypto operations
-                    for op_type, op_patterns in patterns.items():
-                        for pattern in op_patterns:
+        import shutil
+        import tempfile
+        import zipfile
+
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="crypto_audit_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
+
+            results = []
+            operations: list[CryptoOperation] = []
+            hardcoded_keys = []
+            insecure_random = []
+            iv_issues = []
+
+            # Determine source extensions based on platform
+            if app.platform == "android":
+                extensions = [".java", ".kt", ".smali"]
+                patterns = CRYPTO_PATTERNS["android"]
+            else:
+                extensions = [".swift", ".m", ".mm", ".h"]
+                patterns = CRYPTO_PATTERNS["ios"]
+
+            # Add common extensions
+            extensions.extend([".js", ".ts", ".dart"])
+
+            for ext in extensions:
+                for source_file in extracted_path.rglob(f"*{ext}"):
+                    try:
+                        content = source_file.read_text(errors='ignore')
+                        rel_path = str(source_file.relative_to(extracted_path))
+
+                        # Find crypto operations
+                        for op_type, op_patterns in patterns.items():
+                            for pattern in op_patterns:
+                                matches = re.finditer(pattern, content, re.IGNORECASE)
+                                for match in matches:
+                                    algo = match.group(1) if match.lastindex else match.group(0)
+                                    line_num = content[:match.start()].count('\n') + 1
+                                    snippet = self._extract_snippet(content, match.start())
+
+                                    op = CryptoOperation(
+                                        operation_type=op_type,
+                                        algorithm=algo,
+                                        file_path=rel_path,
+                                        line_number=line_num,
+                                        code_snippet=snippet,
+                                    )
+                                    self._check_weakness(op)
+                                    operations.append(op)
+
+                        # Check for hardcoded keys
+                        for pattern in HARDCODED_KEY_PATTERNS:
                             matches = re.finditer(pattern, content, re.IGNORECASE)
                             for match in matches:
-                                algo = match.group(1) if match.lastindex else match.group(0)
                                 line_num = content[:match.start()].count('\n') + 1
-                                snippet = self._extract_snippet(content, match.start())
+                                hardcoded_keys.append({
+                                    "file": rel_path,
+                                    "line": line_num,
+                                    "snippet": self._extract_snippet(content, match.start()),
+                                })
 
-                                op = CryptoOperation(
-                                    operation_type=op_type,
-                                    algorithm=algo,
-                                    file_path=rel_path,
-                                    line_number=line_num,
-                                    code_snippet=snippet,
-                                )
-                                self._check_weakness(op)
-                                operations.append(op)
+                        # Check for insecure random
+                        for pattern in INSECURE_RANDOM_PATTERNS:
+                            if re.search(pattern, content):
+                                matches = re.finditer(pattern, content)
+                                for match in matches:
+                                    line_num = content[:match.start()].count('\n') + 1
+                                    insecure_random.append({
+                                        "file": rel_path,
+                                        "line": line_num,
+                                        "pattern": match.group(0),
+                                    })
 
-                    # Check for hardcoded keys
-                    for pattern in HARDCODED_KEY_PATTERNS:
-                        matches = re.finditer(pattern, content, re.IGNORECASE)
-                        for match in matches:
-                            line_num = content[:match.start()].count('\n') + 1
-                            hardcoded_keys.append({
-                                "file": rel_path,
-                                "line": line_num,
-                                "snippet": self._extract_snippet(content, match.start()),
-                            })
-
-                    # Check for insecure random
-                    for pattern in INSECURE_RANDOM_PATTERNS:
-                        if re.search(pattern, content):
+                        # Check for IV issues
+                        for pattern in IV_PATTERNS:
                             matches = re.finditer(pattern, content)
                             for match in matches:
                                 line_num = content[:match.start()].count('\n') + 1
-                                insecure_random.append({
+                                iv_issues.append({
                                     "file": rel_path,
                                     "line": line_num,
-                                    "pattern": match.group(0),
+                                    "snippet": self._extract_snippet(content, match.start()),
                                 })
 
-                    # Check for IV issues
-                    for pattern in IV_PATTERNS:
-                        matches = re.finditer(pattern, content)
-                        for match in matches:
-                            line_num = content[:match.start()].count('\n') + 1
-                            iv_issues.append({
-                                "file": rel_path,
-                                "line": line_num,
-                                "snippet": self._extract_snippet(content, match.start()),
-                            })
+                    except Exception as e:
+                        logger.debug(f"Error analyzing {source_file}: {e}")
 
-                except Exception as e:
-                    logger.debug(f"Error analyzing {source_file}: {e}")
+            # Create findings
+            weak_ops = [op for op in operations if op.is_weak]
+            if weak_ops:
+                results.extend(self._create_weak_algorithm_findings(weak_ops, app))
 
-        # Create findings
-        weak_ops = [op for op in operations if op.is_weak]
-        if weak_ops:
-            results.extend(self._create_weak_algorithm_findings(weak_ops, app))
+            if hardcoded_keys:
+                results.append(self._create_hardcoded_key_finding(hardcoded_keys, app))
 
-        if hardcoded_keys:
-            results.append(self._create_hardcoded_key_finding(hardcoded_keys, app))
+            if insecure_random:
+                results.append(self._create_insecure_random_finding(insecure_random, app))
 
-        if insecure_random:
-            results.append(self._create_insecure_random_finding(insecure_random, app))
+            if iv_issues:
+                results.append(self._create_iv_finding(iv_issues, app))
 
-        if iv_issues:
-            results.append(self._create_iv_finding(iv_issues, app))
+            # Summary finding
+            if operations:
+                results.append(self._create_summary_finding(operations, app))
 
-        # Summary finding
-        if operations:
-            results.append(self._create_summary_finding(operations, app))
+            # Convert AnalyzerResults to Findings
+            findings = []
+            for result in results:
+                findings.append(self.result_to_finding(app, result))
 
-        return results
+            return findings
+
+        except Exception as e:
+            logger.error(f"Crypto audit failed: {e}")
+            return []
+        finally:
+            if extracted_path and extracted_path.exists():
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     def _extract_snippet(self, content: str, position: int, context_lines: int = 2) -> str:
-        """Extract code snippet around a position."""
+        """Extract a code snippet with surrounding context lines.
+
+        Args:
+            content: Full file content to extract from.
+            position: Character offset of the match in the content.
+            context_lines: Number of lines to include above and below
+                the matched line. Defaults to 2.
+
+        Returns:
+            A string containing the matched line plus surrounding
+            context lines.
+        """
         lines = content.split('\n')
         line_num = content[:position].count('\n')
 
@@ -249,7 +340,16 @@ class CryptoAuditor(BaseAnalyzer):
         return '\n'.join(lines[start:end])
 
     def _check_weakness(self, op: CryptoOperation):
-        """Check if a crypto operation uses weak algorithms."""
+        """Check if a crypto operation uses weak algorithms and mark it.
+
+        Evaluates the operation's algorithm against the WEAK_ALGORITHMS
+        lookup table, checks for ECB mode usage, and inspects RSA key
+        sizes extracted from surrounding code context. Sets is_weak and
+        weakness_reason on the CryptoOperation in-place.
+
+        Args:
+            op: The CryptoOperation dataclass to evaluate and mutate.
+        """
         algo_upper = op.algorithm.upper()
 
         # Check direct matches
@@ -281,7 +381,19 @@ class CryptoAuditor(BaseAnalyzer):
         operations: list[CryptoOperation],
         app: MobileApp
     ) -> list[AnalyzerResult]:
-        """Create findings for weak cryptographic algorithms."""
+        """Create findings for weak cryptographic algorithms.
+
+        Groups weak operations by their base algorithm name and produces
+        one AnalyzerResult per unique algorithm, including occurrence
+        counts, file locations, and OWASP/CWE classification.
+
+        Args:
+            operations: List of CryptoOperation instances flagged as weak.
+            app: The mobile application being analyzed.
+
+        Returns:
+            A list of AnalyzerResult instances, one per weak algorithm.
+        """
         results = []
 
         # Group by algorithm
@@ -332,7 +444,14 @@ class CryptoAuditor(BaseAnalyzer):
         return results
 
     def _get_remediation(self, algorithm: str) -> str:
-        """Get remediation advice for a weak algorithm."""
+        """Get remediation advice for a weak algorithm.
+
+        Args:
+            algorithm: The algorithm name (e.g., "MD5", "DES", "ECB").
+
+        Returns:
+            A remediation string with recommended replacement algorithms.
+        """
         algo_upper = algorithm.upper()
 
         if any(x in algo_upper for x in ["MD5", "MD4", "MD2", "SHA1"]):
@@ -350,7 +469,22 @@ class CryptoAuditor(BaseAnalyzer):
         return "Replace with modern, well-reviewed cryptographic algorithms. Consult NIST guidelines for recommendations."
 
     def _create_hardcoded_key_finding(self, keys: list[dict], app: MobileApp) -> AnalyzerResult:
-        """Create finding for hardcoded cryptographic keys."""
+        """Create a critical finding for hardcoded cryptographic key material.
+
+        Generates a detailed AnalyzerResult including platform-specific
+        PoC commands for key extraction, Frida scripts for runtime key
+        interception, and remediation code samples for Android KeyStore
+        and iOS Keychain.
+
+        Args:
+            keys: List of dicts with 'file', 'line', and 'snippet' keys
+                indicating where hardcoded keys were found.
+            app: The mobile application being analyzed.
+
+        Returns:
+            An AnalyzerResult with CWE-321 classification and detailed
+            remediation guidance.
+        """
         locations = "\n".join([
             f"- {k['file']}:{k['line']}"
             for k in keys[:10]
@@ -484,7 +618,21 @@ guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
         )
 
     def _create_insecure_random_finding(self, instances: list[dict], app: MobileApp) -> AnalyzerResult:
-        """Create finding for insecure random number generation."""
+        """Create a finding for insecure random number generation.
+
+        Generates a high-severity AnalyzerResult with Frida scripts for
+        hooking random functions at runtime and platform-specific
+        remediation code using SecureRandom (Android) or
+        SecRandomCopyBytes (iOS).
+
+        Args:
+            instances: List of dicts with 'file', 'line', and 'pattern'
+                indicating insecure PRNG usage locations.
+            app: The mobile application being analyzed.
+
+        Returns:
+            An AnalyzerResult with CWE-330 classification.
+        """
         locations = "\n".join([
             f"- {i['file']}:{i['line']} - {i['pattern']}"
             for i in instances[:10]
@@ -597,7 +745,20 @@ guard status == errSecSuccess else { throw CryptoError.randomGenerationFailed }'
         )
 
     def _create_iv_finding(self, issues: list[dict], app: MobileApp) -> AnalyzerResult:
-        """Create finding for IV/nonce issues."""
+        """Create a finding for initialization vector (IV) and nonce issues.
+
+        Generates a high-severity AnalyzerResult with Frida scripts for
+        monitoring IV creation at runtime and remediation code showing
+        proper GCM nonce generation.
+
+        Args:
+            issues: List of dicts with 'file', 'line', and 'snippet'
+                indicating static or predictable IV usage.
+            app: The mobile application being analyzed.
+
+        Returns:
+            An AnalyzerResult with CWE-329 classification.
+        """
         locations = "\n".join([
             f"- {i['file']}:{i['line']}"
             for i in issues[:10]
@@ -730,7 +891,19 @@ let sealedBox = try AES.GCM.seal(
         )
 
     def _create_summary_finding(self, operations: list[CryptoOperation], app: MobileApp) -> AnalyzerResult:
-        """Create summary of all crypto operations."""
+        """Create an informational summary of all detected crypto operations.
+
+        Aggregates operations by type, counts weak vs. strong algorithms,
+        and lists all unique algorithms found.
+
+        Args:
+            operations: All detected CryptoOperation instances.
+            app: The mobile application being analyzed.
+
+        Returns:
+            An info-severity AnalyzerResult summarizing the cryptographic
+            landscape of the application.
+        """
         # Count by type
         by_type = {}
         for op in operations:

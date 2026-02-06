@@ -1,4 +1,24 @@
-"""Native library analyzer for Android .so files."""
+"""Native library binary security analyzer for Android ``.so`` (ELF) files.
+
+Extracts and analyzes native shared libraries from APK files to assess
+binary security hardening features. Performs direct ELF header and program
+header parsing without external tools (no readelf/objdump dependency).
+
+Security features checked:
+    - **PIE** (Position Independent Executable): Enables ASLR for the library.
+      Detects via ELF ``e_type`` (ET_DYN vs ET_EXEC). Maps to CWE-119.
+    - **Stack canaries**: Buffer overflow detection via ``__stack_chk_fail``
+      symbol presence. Maps to CWE-121.
+    - **RELRO** (Relocation Read-Only): GOT protection level (none, partial,
+      full). Determined by PT_GNU_RELRO segment + BIND_NOW flag. Maps to CWE-119.
+    - **NX** (Non-executable stack): Prevents shellcode execution on the stack.
+      Checked via PT_GNU_STACK segment flags. Maps to CWE-119.
+    - **FORTIFY_SOURCE**: Compile-time/runtime bounds checking for C library
+      functions. Detected via ``__*_chk`` symbol presence. Maps to CWE-120.
+
+OWASP references:
+    - MASVS-RESILIENCE, MSTG-CODE-9
+"""
 
 import logging
 import struct
@@ -29,13 +49,34 @@ ELFCLASS64 = 2
 
 
 class NativeLibAnalyzer(BaseAnalyzer):
-    """Analyzes native libraries (.so files) for security features."""
+    """Analyzes Android native libraries (``.so`` ELF files) for binary hardening.
+
+    Extracts ``.so`` files from the ``lib/<arch>/`` directories within APK
+    archives, parses their ELF headers in pure Python, and checks for the
+    presence of standard binary security features (PIE, stack canaries,
+    RELRO, NX, FORTIFY_SOURCE).
+
+    Each missing security feature generates a finding with PoC commands
+    using ``readelf``/``nm`` and specific compiler flags for remediation.
+
+    Attributes:
+        name: Analyzer identifier (``"native_lib_analyzer"``).
+        platform: Target platform (``"android"`` only).
+    """
 
     name = "native_lib_analyzer"
     platform = "android"
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze native libraries in the APK."""
+        """Extract and analyze all native libraries in the APK.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` pointing to the APK.
+
+        Returns:
+            List of Finding objects for each missing security feature across
+            all native libraries.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -57,7 +98,19 @@ class NativeLibAnalyzer(BaseAnalyzer):
     async def _extract_native_libs(
         self, apk_path: Path
     ) -> list[tuple[Path, str, str]]:
-        """Extract .so files from APK."""
+        """Extract ``.so`` files from the APK's ``lib/`` directory.
+
+        Each library is written to a temporary file for analysis. Callers
+        are responsible for cleaning up temp files (handled in
+        ``_analyze_library``).
+
+        Args:
+            apk_path: Filesystem path to the APK file.
+
+        Returns:
+            List of tuples: (temp_file_path, library_name, architecture).
+            Architecture is the ABI directory name (e.g., ``"arm64-v8a"``).
+        """
         libs = []
 
         try:
@@ -89,7 +142,21 @@ class NativeLibAnalyzer(BaseAnalyzer):
         lib_name: str,
         arch: str,
     ) -> list[Finding]:
-        """Analyze a single native library."""
+        """Analyze a single native library for binary security features.
+
+        Reads the ELF binary, verifies the magic number, parses headers,
+        and checks each security feature. Cleans up the temporary file
+        after analysis.
+
+        Args:
+            app: MobileApp ORM model for the scanned application.
+            lib_path: Temporary file path containing the extracted ``.so``.
+            lib_name: Original library filename (e.g., ``"libnative.so"``).
+            arch: CPU architecture (e.g., ``"arm64-v8a"``).
+
+        Returns:
+            List of Finding objects for missing security features.
+        """
         findings = []
 
         try:
@@ -394,7 +461,21 @@ class NativeLibAnalyzer(BaseAnalyzer):
         return findings
 
     def _parse_elf_security(self, data: bytes, is_64bit: bool) -> dict:
-        """Parse ELF headers for security features."""
+        """Parse ELF headers to determine binary security feature status.
+
+        Performs pure-Python parsing of the ELF header and program headers
+        to detect PIE, RELRO, NX, stack canaries, and FORTIFY_SOURCE.
+
+        Args:
+            data: Raw ELF binary data.
+            is_64bit: True if the ELF is 64-bit (ELFCLASS64), False for 32-bit.
+
+        Returns:
+            Dict with keys: ``pie`` (bool), ``stack_canary`` (bool),
+            ``relro`` (``"none"``/``"partial"``/``"full"``),
+            ``has_relro_segment`` (bool), ``bind_now`` (bool), ``nx`` (bool),
+            ``fortify`` (bool), ``e_type`` (str).
+        """
         result = {
             "pie": False,
             "stack_canary": False,

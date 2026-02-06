@@ -1,4 +1,24 @@
-"""iOS plist analyzer for Info.plist and entitlements."""
+"""iOS plist analyzer for Info.plist security configuration.
+
+Parses Info.plist from iOS application archives (IPA files) to evaluate
+transport security settings, URL scheme registrations, privacy usage
+descriptions, and other security-relevant configuration keys.
+
+Security checks performed:
+    - **App Transport Security (ATS)**: Detects disabled ATS
+      (NSAllowsArbitraryLoads) and ATS exception domains.
+    - **URL Schemes**: Enumerates registered custom URL schemes
+      (CFBundleURLSchemes) and assesses hijacking risk.
+    - **Privacy Usage Descriptions**: Verifies presence and content
+      of NSUsageDescription keys for sensitive permissions.
+    - **Entitlement Analysis**: Checks for dangerous entitlements
+      like get-task-allow (debugging) and associated domains.
+
+OWASP references:
+    - MASVS-NETWORK: Network Communication (ATS)
+    - MASVS-PLATFORM: Platform Interaction (URL schemes)
+    - MASVS-PRIVACY: Privacy (usage descriptions)
+"""
 
 import logging
 import plistlib
@@ -13,13 +33,29 @@ logger = logging.getLogger(__name__)
 
 
 class PlistAnalyzer(BaseAnalyzer):
-    """Analyzes iOS Info.plist and entitlements for security issues."""
+    """Analyzes iOS Info.plist and entitlements for security issues.
+
+    Extracts and parses Info.plist and embedded.mobileprovision from
+    IPA archives to evaluate ATS configuration, URL scheme security,
+    privacy descriptions, and entitlement settings.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform ("ios").
+    """
 
     name = "plist_analyzer"
     platform = "ios"
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze iOS plists."""
+        """Analyze iOS Info.plist and entitlements for security issues.
+
+        Args:
+            app: The mobile application to analyze.
+
+        Returns:
+            A list of Finding objects for plist security issues.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:

@@ -1,8 +1,36 @@
-"""IPC Vulnerability Scanner.
+"""Inter-Process Communication (IPC) vulnerability scanner for mobile apps.
 
-Analyzes Inter-Process Communication components for security issues:
-- Android: Activities, Services, Broadcast Receivers, Content Providers
-- iOS: URL Schemes, Universal Links, App Extensions
+Performs comprehensive analysis of IPC components to detect security
+misconfigurations that could allow unauthorized inter-app communication,
+data leakage, or privilege escalation.
+
+Android analysis:
+    - **Exported Activities**: Detects activities accessible from other
+      apps, including those with sensitive intent actions (login, payment).
+    - **Exported Services**: Identifies services that can be started or
+      bound by external applications without permission protection.
+    - **Broadcast Receivers**: Finds receivers that accept broadcasts
+      from any application, enabling intent spoofing attacks.
+    - **Content Providers**: Checks for providers with grantUriPermissions
+      or missing read/write permission requirements.
+    - **Deep Link Handlers**: Detects browsable activities with URL
+      scheme handlers that may be exploitable.
+
+iOS analysis:
+    - **URL Schemes**: Enumerates registered custom URL schemes and
+      assesses hijacking risk (CFBundleURLSchemes).
+    - **Universal Links**: Parses associated domains for App Transport
+      Security and domain verification.
+    - **App Extensions**: Discovers extensions in the Plugins directory
+      and their NSExtensionPointIdentifier types.
+    - **Document Types**: Lists registered UTIs from CFBundleDocumentTypes.
+
+OWASP references:
+    - MASVS-PLATFORM: Platform Interaction
+    - MSTG-PLATFORM-1: Testing for Improper Platform Usage
+    - MSTG-PLATFORM-3: Testing Custom URL Schemes
+    - CWE-926: Improper Export of Android Application Components
+    - CWE-927: Use of Implicit Intent for Sensitive Communication
 """
 
 import logging
@@ -11,7 +39,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from api.models.database import MobileApp
+from api.models.database import Finding, MobileApp
 from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
 
 logger = logging.getLogger(__name__)
@@ -31,47 +59,105 @@ class IPCComponent:
 
 
 class IPCScanner(BaseAnalyzer):
-    """Scans for IPC vulnerabilities in mobile applications."""
+    """Scans for IPC vulnerabilities in mobile applications.
+
+    Extracts the application archive, parses AndroidManifest.xml or
+    iOS Info.plist to enumerate all IPC components, analyzes each
+    component for security vulnerabilities, and produces categorized
+    findings for exported components, URL scheme handlers, and
+    platform-specific IPC misconfigurations.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        description: Human-readable description of analyzer purpose.
+    """
 
     name = "ipc_scanner"
     description = "Analyzes IPC components for security vulnerabilities"
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
-        """Analyze IPC components."""
-        results = []
-        components: list[IPCComponent] = []
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze IPC components for security vulnerabilities.
 
-        if app.platform == "android":
-            components.extend(await self._analyze_android(extracted_path))
-        elif app.platform == "ios":
-            components.extend(await self._analyze_ios(extracted_path))
+        Args:
+            app: The mobile application to analyze.
 
-        # Analyze each component for vulnerabilities
-        for component in components:
-            self._check_vulnerabilities(component, app.platform)
+        Returns:
+            A list of Finding objects covering exported components,
+            URL scheme handlers, and IPC vulnerability details.
+        """
+        if not app.file_path:
+            return []
 
-        # Create findings
-        exported_components = [c for c in components if c.is_exported and not c.permission_required]
-        if exported_components:
-            results.extend(self._create_exported_findings(exported_components, app))
+        import shutil
+        import tempfile
+        import zipfile
 
-        vulnerable_components = [c for c in components if c.vulnerabilities]
-        if vulnerable_components:
-            results.extend(self._create_vulnerability_findings(vulnerable_components, app))
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="ipc_scan_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
 
-        # URL scheme analysis
-        url_scheme_components = [c for c in components if c.url_schemes]
-        if url_scheme_components:
-            results.append(self._create_url_scheme_finding(url_scheme_components, app))
+            results = []
+            components: list[IPCComponent] = []
 
-        # Summary
-        if components:
-            results.append(self._create_summary(components, app))
+            if app.platform == "android":
+                components.extend(await self._analyze_android(extracted_path))
+            elif app.platform == "ios":
+                components.extend(await self._analyze_ios(extracted_path))
 
-        return results
+            # Analyze each component for vulnerabilities
+            for component in components:
+                self._check_vulnerabilities(component, app.platform)
+
+            # Create findings
+            exported_components = [c for c in components if c.is_exported and not c.permission_required]
+            if exported_components:
+                results.extend(self._create_exported_findings(exported_components, app))
+
+            vulnerable_components = [c for c in components if c.vulnerabilities]
+            if vulnerable_components:
+                results.extend(self._create_vulnerability_findings(vulnerable_components, app))
+
+            # URL scheme analysis
+            url_scheme_components = [c for c in components if c.url_schemes]
+            if url_scheme_components:
+                results.append(self._create_url_scheme_finding(url_scheme_components, app))
+
+            # Summary
+            if components:
+                results.append(self._create_summary(components, app))
+
+            # Convert AnalyzerResults to Findings
+            findings = []
+            for result in results:
+                findings.append(self.result_to_finding(app, result))
+
+            return findings
+
+        except Exception as e:
+            logger.error(f"IPC scan failed: {e}")
+            return []
+        finally:
+            if extracted_path and extracted_path.exists():
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     async def _analyze_android(self, extracted_path: Path) -> list[IPCComponent]:
-        """Analyze Android IPC components from AndroidManifest.xml."""
+        """Analyze Android IPC components from AndroidManifest.xml.
+
+        Parses the manifest to enumerate all activities, services,
+        broadcast receivers, and content providers with their export
+        status, permissions, and intent filters.
+
+        Args:
+            extracted_path: Root directory of the extracted APK.
+
+        Returns:
+            A list of IPCComponent instances for each Android component.
+        """
         components = []
         manifest_path = extracted_path / "AndroidManifest.xml"
 
@@ -177,7 +263,17 @@ class IPCScanner(BaseAnalyzer):
         return components
 
     async def _analyze_ios(self, extracted_path: Path) -> list[IPCComponent]:
-        """Analyze iOS IPC components from Info.plist."""
+        """Analyze iOS IPC components from Info.plist.
+
+        Parses the Info.plist to extract URL schemes, associated
+        domains (universal links), app extensions, and document types.
+
+        Args:
+            extracted_path: Root directory of the extracted IPA.
+
+        Returns:
+            A list of IPCComponent instances for each iOS IPC surface.
+        """
         components = []
 
         # Find Info.plist
@@ -235,7 +331,19 @@ class IPCScanner(BaseAnalyzer):
         return components
 
     def _is_exported(self, element, ns: dict) -> bool:
-        """Determine if an Android component is exported."""
+        """Determine if an Android component is exported.
+
+        Checks the explicit android:exported attribute first, then
+        falls back to implicit export detection based on the presence
+        of intent-filter elements (pre-Android 12 behavior).
+
+        Args:
+            element: The XML element representing the Android component.
+            ns: Namespace mapping for Android XML attributes.
+
+        Returns:
+            True if the component is exported (explicitly or implicitly).
+        """
         # Explicit exported attribute
         exported_attr = element.get('{http://schemas.android.com/apk/res/android}exported')
         if exported_attr is not None:
@@ -246,7 +354,18 @@ class IPCScanner(BaseAnalyzer):
         return len(intent_filters) > 0
 
     def _parse_intent_filters(self, element, ns: dict) -> list[dict]:
-        """Parse intent filters from an Android component."""
+        """Parse intent filters from an Android component.
+
+        Extracts actions, categories, and data elements (scheme, host,
+        path, mimeType) from each intent-filter child element.
+
+        Args:
+            element: The XML element representing the Android component.
+            ns: Namespace mapping for Android XML attributes.
+
+        Returns:
+            A list of dicts with 'actions', 'categories', and 'data' keys.
+        """
         filters = []
 
         for intent_filter in element.findall('.//intent-filter', ns) + element.findall('.//intent-filter'):
@@ -362,7 +481,15 @@ class IPCScanner(BaseAnalyzer):
         return extensions
 
     def _check_vulnerabilities(self, component: IPCComponent, platform: str):
-        """Check component for specific vulnerabilities."""
+        """Check an IPC component for platform-specific vulnerabilities.
+
+        Delegates to Android or iOS vulnerability checks. Mutates the
+        component's vulnerabilities list in-place.
+
+        Args:
+            component: The IPCComponent to evaluate.
+            platform: Either "android" or "ios".
+        """
         if platform == "android":
             self._check_android_vulnerabilities(component)
         else:

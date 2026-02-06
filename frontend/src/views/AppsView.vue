@@ -188,6 +188,19 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * AppsView - Application management view for uploading, browsing, and managing mobile apps.
+ *
+ * Features:
+ * - Paginated data table of uploaded APK/IPA/AAB files
+ * - Platform and framework filters with debounced search
+ * - Drag-and-drop file upload dialog
+ * - Scan initiation dialog with static/dynamic/full type selection
+ * - Confirmation-based app deletion
+ *
+ * @requires useAppsStore - CRUD operations and pagination for mobile apps
+ * @requires useScansStore - creating new scans from the apps list
+ */
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppsStore, type MobileApp } from '@/stores/apps'

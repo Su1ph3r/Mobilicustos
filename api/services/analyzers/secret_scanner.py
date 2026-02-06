@@ -1,4 +1,27 @@
-"""Secret scanner for detecting hardcoded credentials."""
+"""Secret scanner for detecting hardcoded credentials in mobile applications.
+
+Scans application archives (APK/IPA) for hardcoded secrets, API keys, tokens,
+private keys, and database connection strings using regular expression pattern
+matching. Supports provider-specific detection for:
+
+    - **Cloud providers**: AWS (access keys, secret keys), Google (API keys,
+      OAuth client IDs), Firebase (URLs, server keys)
+    - **Payment**: Stripe (secret keys, publishable keys)
+    - **Communication**: Twilio (API keys), Slack (tokens, webhooks)
+    - **Source control**: GitHub (personal tokens, OAuth tokens)
+    - **Cryptographic**: RSA, EC, and SSH private keys
+    - **Database**: PostgreSQL and MongoDB connection strings
+    - **Generic**: Bearer tokens, Basic auth headers, hardcoded passwords,
+      generic API keys
+
+Each detected secret is redacted for safe display, hashed for deduplication,
+and enriched with provider-specific remediation commands and resources.
+
+OWASP references:
+    - MASVS-STORAGE-1: Secure storage of sensitive data
+    - MASTG-TEST-0001: Testing for sensitive data in local storage
+    - CWE-798: Use of hard-coded credentials
+"""
 
 import logging
 import re
@@ -182,13 +205,37 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
 
 
 class SecretScanner(BaseAnalyzer):
-    """Scans for hardcoded secrets and credentials."""
+    """Scans mobile application archives for hardcoded secrets and credentials.
+
+    Extracts text-based files from APK/IPA archives and applies regex-based
+    pattern matching from ``SECRET_PATTERNS`` to detect hardcoded secrets.
+    Detected secrets are redacted, hashed for deduplication, and enriched
+    with provider-specific PoC commands and remediation guidance.
+
+    Supports scanning of source code (.java, .kt, .swift, .dart, .js, .ts),
+    configuration files (.xml, .json, .yaml, .properties, .plist), and
+    documentation (.txt, .md). Files larger than 10 MB are skipped.
+
+    Attributes:
+        name: Analyzer identifier (``"secret_scanner"``).
+        platform: Target platform (``"cross-platform"`` -- works on both
+            Android and iOS).
+    """
 
     name = "secret_scanner"
     platform = "cross-platform"
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Scan app for secrets."""
+        """Scan the application archive for hardcoded secrets.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` pointing to the
+                APK or IPA archive.
+
+        Returns:
+            List of Finding objects, one per detected secret. Returns an
+            empty list if the file path is missing or scanning fails.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -211,7 +258,21 @@ class SecretScanner(BaseAnalyzer):
         archive_path: Path,
         platform: str,
     ) -> list[dict[str, Any]]:
-        """Scan archive for secrets."""
+        """Scan all text files within an archive for secret patterns.
+
+        Iterates over files in the ZIP archive, skipping large files
+        (> 10 MB) and non-text extensions. Each eligible file's content
+        is decoded and scanned against ``SECRET_PATTERNS``.
+
+        Args:
+            archive_path: Filesystem path to the APK or IPA archive.
+            platform: Target platform (``"android"`` or ``"ios"``).
+
+        Returns:
+            List of secret dicts, each with keys: ``name``, ``type``,
+            ``provider``, ``severity``, ``file_path``, ``line_number``,
+            ``context``, ``value_redacted``, ``value_hash``.
+        """
         secrets: list[dict[str, Any]] = []
 
         # File extensions to scan
@@ -255,7 +316,20 @@ class SecretScanner(BaseAnalyzer):
         content: str,
         file_path: str,
     ) -> list[dict[str, Any]]:
-        """Scan content for secrets using patterns."""
+        """Scan a single file's content against all secret patterns.
+
+        For each match, determines the line number, extracts surrounding
+        context lines, and creates a redacted/hashed representation of
+        the secret value.
+
+        Args:
+            content: Decoded text content of the file.
+            file_path: Relative path of the file within the archive (used
+                for reporting).
+
+        Returns:
+            List of secret dicts for each pattern match found.
+        """
         secrets: list[dict[str, Any]] = []
 
         for pattern_def in SECRET_PATTERNS:
@@ -290,13 +364,30 @@ class SecretScanner(BaseAnalyzer):
         return secrets
 
     def _redact_secret(self, secret: str) -> str:
-        """Redact a secret for safe display."""
+        """Redact a secret value for safe display in findings.
+
+        Preserves the first 4 and last 4 characters, replacing the middle
+        with asterisks. Secrets 8 characters or shorter are fully masked.
+
+        Args:
+            secret: Raw secret string to redact.
+
+        Returns:
+            Redacted string safe for storage and display.
+        """
         if len(secret) <= 8:
             return "*" * len(secret)
         return secret[:4] + "*" * (len(secret) - 8) + secret[-4:]
 
     def _hash_secret(self, secret: str) -> str:
-        """Hash a secret for deduplication."""
+        """Hash a secret value for deduplication across scans.
+
+        Args:
+            secret: Raw secret string to hash.
+
+        Returns:
+            First 16 characters of the SHA-256 hex digest.
+        """
         import hashlib
         return hashlib.sha256(secret.encode()).hexdigest()[:16]
 
@@ -305,7 +396,21 @@ class SecretScanner(BaseAnalyzer):
         app: MobileApp,
         secret: dict[str, Any],
     ) -> Finding:
-        """Create a finding from a detected secret."""
+        """Create a Finding from a detected secret with provider-specific guidance.
+
+        Generates PoC commands for secret validation, provider-specific
+        remediation resources (e.g., AWS Secrets Manager, Android Keystore),
+        and code examples for secure alternatives.
+
+        Args:
+            app: MobileApp ORM model for the scanned application.
+            secret: Secret dict from ``_scan_content()`` with keys: ``name``,
+                ``type``, ``provider``, ``severity``, ``file_path``,
+                ``line_number``, ``context``, ``value_redacted``, ``value_hash``.
+
+        Returns:
+            Finding ORM model ready for database insertion.
+        """
         provider_info = f" ({secret['provider']})" if secret["provider"] else ""
         provider = secret.get("provider", "unknown")
 

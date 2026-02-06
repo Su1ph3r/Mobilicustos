@@ -1,7 +1,19 @@
-"""Binary Protection Analyzer.
+"""Binary protection and RASP (Runtime Application Self-Protection) analyzer.
 
-Analyzes binary protections including obfuscation, PIE, ARC,
-stack canaries, RASP detection, and anti-tampering mechanisms.
+Analyzes mobile application binaries for the presence of security
+hardening features and commercial protection SDKs:
+
+    - **Code obfuscation**: ProGuard/R8 (Android), Swift name mangling (iOS)
+    - **Binary hardening**: PIE, ARC, stack canaries (see also NativeLibAnalyzer)
+    - **RASP SDKs**: DexGuard, iXGuard, Arxan/Digital.ai, Promon SHIELD,
+      Guardsquare, Zimperium zIAP
+    - **Anti-tampering**: Integrity verification, debugger detection,
+      emulator detection, root/jailbreak detection
+    - **String encryption**: Encrypted string tables, runtime decryption
+
+OWASP references:
+    - MASVS-RESILIENCE: Anti-reversing and anti-tampering
+    - MSTG-CODE-9: Binary security features
 """
 
 import logging
@@ -9,7 +21,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from api.models.database import MobileApp
+from api.models.database import Finding, MobileApp
 from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
 
 logger = logging.getLogger(__name__)
@@ -119,34 +131,62 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
     name = "binary_protection_analyzer"
     description = "Analyzes binary protections, obfuscation, RASP, and security features"
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
+    async def analyze(self, app: MobileApp) -> list[Finding]:
         """Analyze binary protections."""
-        results = []
-        protections = {
-            "obfuscation": {"detected": False, "tool": None, "evidence": []},
-            "rasp": {"detected": False, "vendor": None, "features": []},
-            "anti_tampering": {"detected": False, "methods": []},
-            "anti_debugging": {"detected": False, "methods": []},
-            "root_jailbreak_detection": {"detected": False, "methods": []},
-            "emulator_detection": {"detected": False, "methods": []},
-        }
+        if not app.file_path:
+            return []
 
-        if app.platform == "android":
-            protections.update(await self._analyze_android(extracted_path))
-        elif app.platform == "ios":
-            protections.update(await self._analyze_ios(extracted_path))
+        import shutil
+        import tempfile
+        import zipfile
 
-        # Check for RASP/Security SDKs
-        rasp_results = await self._detect_rasp(extracted_path)
-        if rasp_results:
-            protections["rasp"]["detected"] = True
-            protections["rasp"]["vendor"] = rasp_results.get("vendor")
-            protections["rasp"]["features"] = rasp_results.get("features", [])
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="bin_prot_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
 
-        # Create findings based on analysis
-        results.extend(self._create_findings(protections, app))
+            results = []
+            protections = {
+                "obfuscation": {"detected": False, "tool": None, "evidence": []},
+                "rasp": {"detected": False, "vendor": None, "features": []},
+                "anti_tampering": {"detected": False, "methods": []},
+                "anti_debugging": {"detected": False, "methods": []},
+                "root_jailbreak_detection": {"detected": False, "methods": []},
+                "emulator_detection": {"detected": False, "methods": []},
+            }
 
-        return results
+            if app.platform == "android":
+                protections.update(await self._analyze_android(extracted_path))
+            elif app.platform == "ios":
+                protections.update(await self._analyze_ios(extracted_path))
+
+            # Check for RASP/Security SDKs
+            rasp_results = await self._detect_rasp(extracted_path)
+            if rasp_results:
+                protections["rasp"]["detected"] = True
+                protections["rasp"]["vendor"] = rasp_results.get("vendor")
+                protections["rasp"]["features"] = rasp_results.get("features", [])
+
+            # Create findings based on analysis
+            analyzer_results = self._create_findings(protections, app)
+
+            # Convert AnalyzerResults to Findings
+            findings = []
+            for result in analyzer_results:
+                findings.append(self.result_to_finding(app, result))
+
+            return findings
+
+        except Exception as e:
+            logger.error(f"Binary protection analysis failed: {e}")
+            return []
+        finally:
+            if extracted_path and extracted_path.exists():
+                try:
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     async def _analyze_android(self, extracted_path: Path) -> dict:
         """Analyze Android-specific protections."""

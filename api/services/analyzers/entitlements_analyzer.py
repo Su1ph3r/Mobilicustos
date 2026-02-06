@@ -1,4 +1,28 @@
-"""iOS Entitlements analyzer for comprehensive entitlements security checks."""
+"""iOS entitlements analyzer for comprehensive security evaluation.
+
+Extracts and analyzes entitlements embedded in iOS application binaries
+to detect dangerous capabilities, debugging entitlements, and
+misconfigured security settings.
+
+Security checks performed:
+    - **get-task-allow**: Detects debugging entitlement that allows
+      debugger attachment in production builds (critical).
+    - **App Groups**: Reviews shared container access between apps
+      that could leak data to sibling applications.
+    - **Keychain Access Groups**: Evaluates Keychain sharing scope
+      for potential credential exposure.
+    - **Associated Domains**: Checks Universal Links domain
+      configuration for proper verification.
+    - **Push Notifications**: Notes APS environment (development vs
+      production) entitlements.
+    - **iCloud**: Detects cloud storage entitlements that may sync
+      sensitive data to iCloud.
+
+OWASP references:
+    - MASVS-PLATFORM: Platform Interaction
+    - MASVS-RESILIENCE: Resiliency (debugging detection)
+    - MASVS-STORAGE: Data Storage (Keychain, iCloud)
+"""
 
 import logging
 import plistlib

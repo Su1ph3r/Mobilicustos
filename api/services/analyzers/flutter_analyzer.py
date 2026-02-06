@@ -1,4 +1,32 @@
-"""Flutter/Dart analyzer using Blutter for AOT snapshots."""
+"""Flutter/Dart analyzer for AOT-compiled mobile applications.
+
+Performs specialized analysis of Flutter applications by extracting the
+compiled Dart binary (libapp.so for Android, App.framework/App for iOS)
+and running Blutter decompilation via Docker container to recover class
+names, function signatures, and embedded strings.
+
+Analysis pipeline:
+    1. **Binary Extraction**: Locates and extracts libapp.so (preferring
+       arm64-v8a) or App.framework/App from the application archive.
+    2. **Blutter Decompilation**: Runs Blutter on the extracted binary
+       via a Docker sibling container to produce function/class lists
+       and string tables.
+    3. **Security Analysis**: Scans Blutter output for sensitive function
+       names (password, encrypt, auth, token, biometric) and embedded
+       secrets (base64 strings, API URLs, Firebase URLs).
+    4. **Configuration Checks**: Detects Flutter debug/profile builds
+       (vm_snapshot_data presence) and reviews flutter_assets content.
+
+Note:
+    Flutter apps use Dart/native networking and crypto, so standard
+    Java-level Frida hooks will not trigger. This analyzer works at the
+    Dart AOT binary level instead.
+
+OWASP references:
+    - MASVS-CODE: Code Quality
+    - MASVS-STORAGE: Data Storage (secrets in binary)
+    - MASVS-RESILIENCE: Resiliency Against Reverse Engineering
+"""
 
 import asyncio
 import json
@@ -16,7 +44,17 @@ logger = logging.getLogger(__name__)
 
 
 class FlutterAnalyzer(BaseAnalyzer):
-    """Analyzes Flutter applications using Blutter."""
+    """Analyzes Flutter applications using Blutter AOT decompilation.
+
+    Extracts the compiled Dart binary, runs Blutter via Docker, and
+    scans the output for sensitive functions, embedded secrets, and
+    build configuration issues.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform ("cross-platform").
+        docker: DockerExecutor instance for running Blutter containers.
+    """
 
     name = "flutter_analyzer"
     platform = "cross-platform"
@@ -25,7 +63,19 @@ class FlutterAnalyzer(BaseAnalyzer):
         self.docker = DockerExecutor()
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze a Flutter application."""
+        """Analyze a Flutter application for security issues.
+
+        Skips non-Flutter apps. Extracts the Dart binary, runs Blutter,
+        analyzes the output, and checks Flutter-specific configuration.
+
+        Args:
+            app: The mobile application to analyze. Must have
+                framework="flutter" for Blutter analysis to proceed.
+
+        Returns:
+            A list of Finding objects from Blutter analysis and
+            Flutter configuration checks.
+        """
         findings: list[Finding] = []
 
         if not app.file_path or app.framework != "flutter":
@@ -58,7 +108,20 @@ class FlutterAnalyzer(BaseAnalyzer):
         archive_path: Path,
         platform: str,
     ) -> Path | None:
-        """Extract libapp.so (Android) or App.framework (iOS)."""
+        """Extract the compiled Dart binary from the application archive.
+
+        For Android, extracts libapp.so (preferring arm64-v8a architecture).
+        For iOS, extracts App.framework/App from the Payload directory.
+        Files are extracted to the shared ANALYZER_TEMP_PATH for access
+        by Docker sibling containers.
+
+        Args:
+            archive_path: Path to the APK or IPA archive file.
+            platform: Either "android" or "ios".
+
+        Returns:
+            Path to the extracted binary, or None if not found.
+        """
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 if platform == "android":
@@ -103,7 +166,18 @@ class FlutterAnalyzer(BaseAnalyzer):
         return None
 
     async def _run_blutter(self, libapp_path: Path) -> dict[str, Any] | None:
-        """Run Blutter on the extracted binary."""
+        """Run Blutter decompiler on the extracted Dart binary.
+
+        Executes the Blutter Docker tool with the binary as input and
+        parses the output directory for recovered information.
+
+        Args:
+            libapp_path: Path to the extracted libapp.so or App binary.
+
+        Returns:
+            A dict with 'classes', 'functions', and 'strings' lists
+            from the Blutter output, or None if execution failed.
+        """
         try:
             output_dir = libapp_path.parent / "blutter_output"
             output_dir.mkdir(exist_ok=True)
@@ -129,7 +203,17 @@ class FlutterAnalyzer(BaseAnalyzer):
         self,
         output_dir: Path,
     ) -> dict[str, Any]:
-        """Parse Blutter output files."""
+        """Parse Blutter output files into structured data.
+
+        Reads pp.txt for class and function names, and strings.txt
+        for extracted string literals.
+
+        Args:
+            output_dir: Directory containing Blutter output files.
+
+        Returns:
+            A dict with 'classes', 'functions', and 'strings' lists.
+        """
         output: dict[str, Any] = {
             "classes": [],
             "functions": [],
@@ -163,7 +247,20 @@ class FlutterAnalyzer(BaseAnalyzer):
         app: MobileApp,
         output: dict[str, Any],
     ) -> list[Finding]:
-        """Analyze Blutter output for security issues."""
+        """Analyze Blutter output for security-relevant patterns.
+
+        Scans function names for sensitive operations (password, encrypt,
+        auth, token, biometric) and string literals for embedded secrets
+        (base64 encoded values, API endpoints, Firebase URLs).
+
+        Args:
+            app: The mobile application being analyzed.
+            output: Parsed Blutter output dict with 'functions' and
+                'strings' lists.
+
+        Returns:
+            A list of Finding objects for sensitive functions and strings.
+        """
         findings: list[Finding] = []
 
         # Check for sensitive function names
@@ -244,7 +341,18 @@ class FlutterAnalyzer(BaseAnalyzer):
         return findings
 
     async def _check_flutter_config(self, app: MobileApp) -> list[Finding]:
-        """Check Flutter-specific configuration issues."""
+        """Check Flutter-specific build configuration issues.
+
+        Detects debug/profile builds (vm_snapshot_data presence) and
+        reviews flutter_assets content for potential configuration
+        or data exposure.
+
+        Args:
+            app: The mobile application being analyzed.
+
+        Returns:
+            A list of Finding objects for Flutter configuration issues.
+        """
         findings: list[Finding] = []
 
         try:

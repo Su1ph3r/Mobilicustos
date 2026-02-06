@@ -9,11 +9,18 @@
         </p>
       </div>
       <div class="header-actions">
-        <Button
+        <SplitButton
           label="Export CSV"
           icon="pi pi-download"
           severity="secondary"
-          @click="exportCsv"
+          @click="exportFindings('csv')"
+          :model="exportMenuItems"
+        />
+        <Button
+          label="Purge All"
+          icon="pi pi-trash"
+          severity="danger"
+          @click="confirmPurge"
         />
       </div>
     </div>
@@ -38,22 +45,42 @@
       @page-change="handlePageChange"
       @sort-change="handleSortChange"
     />
+
+    <ConfirmDialog />
   </div>
 </template>
 
 <script setup lang="ts">
+/**
+ * FindingsView - Security findings browser with filtering, sorting, and multi-format export.
+ *
+ * Features:
+ * - Paginated and sortable findings table via FindingsTable component
+ * - Advanced filter panel (severity, status, app, category) via FindingFilters
+ * - Export to CSV, JSON, HTML, PDF, and SARIF formats
+ * - Bulk purge of findings per application with confirmation
+ * - Query-param driven severity filter (e.g., from dashboard click-through)
+ *
+ * @requires useFindingsStore - manages findings state, pagination, filters, and sorting
+ * @requires exportsApi - downloads findings in various export formats
+ * @requires findingsApi - purge endpoint for bulk deletion
+ */
 import { onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useFindingsStore } from '@/stores/findings'
-import { exportsApi } from '@/services/api'
+import { exportsApi, findingsApi } from '@/services/api'
 import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
 import Button from 'primevue/button'
+import SplitButton from 'primevue/splitbutton'
+import ConfirmDialog from 'primevue/confirmdialog'
 import FindingFilters from '@/components/findings/FindingFilters.vue'
 import FindingsTable from '@/components/findings/FindingsTable.vue'
 
 const route = useRoute()
 const findingsStore = useFindingsStore()
 const toast = useToast()
+const confirm = useConfirm()
 
 const loadFindings = () => {
   findingsStore.fetchFindings()
@@ -75,12 +102,26 @@ const handleSortChange = ({ field, order }: { field: string; order: number }) =>
   findingsStore.setSort(field, order === 1 ? 'asc' : 'desc')
 }
 
-const exportCsv = async () => {
+const formatMimeTypes: Record<string, string> = {
+  csv: 'text/csv',
+  json: 'application/json',
+  html: 'text/html',
+  pdf: 'application/pdf',
+  sarif: 'application/json',
+}
+
+const exportMenuItems = [
+  { label: 'CSV', icon: 'pi pi-file', command: () => exportFindings('csv') },
+  { label: 'JSON', icon: 'pi pi-file', command: () => exportFindings('json') },
+  { label: 'HTML Report', icon: 'pi pi-globe', command: () => exportFindings('html') },
+  { label: 'PDF Report', icon: 'pi pi-file-pdf', command: () => exportFindings('pdf') },
+  { label: 'SARIF', icon: 'pi pi-code', command: () => exportFindings('sarif') },
+]
+
+const exportFindings = async (format: string) => {
   try {
-    // Use app_id from filters, or 'all' for all apps
     const appId = findingsStore.filters.app_id || 'all'
 
-    // Build export params from current filters
     const exportParams: Record<string, any> = {}
     if (findingsStore.filters.severity?.length) {
       exportParams.severity = findingsStore.filters.severity
@@ -89,20 +130,47 @@ const exportCsv = async () => {
       exportParams.status = findingsStore.filters.status
     }
 
-    const response = await exportsApi.exportFindings(appId, 'csv', exportParams)
+    const response = await exportsApi.exportFindings(appId, format, exportParams)
 
-    const blob = new Blob([response.data], { type: 'text/csv' })
+    const mimeType = formatMimeTypes[format] || 'application/octet-stream'
+    const blob = new Blob([response.data], { type: mimeType })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = appId === 'all' ? 'all_findings.csv' : `${appId}_findings.csv`
+    const ext = format === 'sarif' ? 'sarif' : format
+    link.download = appId === 'all' ? `all_findings.${ext}` : `${appId}_findings.${ext}`
     link.click()
     window.URL.revokeObjectURL(url)
 
-    toast.add({ severity: 'success', summary: 'Exported', detail: 'Findings exported', life: 2000 })
+    toast.add({ severity: 'success', summary: 'Exported', detail: `Findings exported as ${format.toUpperCase()}`, life: 2000 })
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Error', detail: 'Export failed', life: 3000 })
   }
+}
+
+const confirmPurge = () => {
+  const appId = findingsStore.filters.app_id || 'all'
+  confirm.require({
+    message: `Are you sure you want to delete ALL findings${appId !== 'all' ? ` for app ${appId.substring(0, 8)}...` : ''}? This action cannot be undone.`,
+    header: 'Purge All Findings',
+    icon: 'pi pi-exclamation-triangle',
+    acceptClass: 'p-button-danger',
+    accept: async () => {
+      try {
+        if (!findingsStore.filters.app_id) {
+          toast.add({ severity: 'warn', summary: 'Warning', detail: 'Please select an app to purge findings for', life: 3000 })
+          return
+        }
+        const response = await findingsApi.purge(findingsStore.filters.app_id)
+        toast.add({ severity: 'success', summary: 'Purged', detail: response.data.message, life: 3000 })
+        loadFindings()
+        findingsStore.fetchSummary()
+      } catch (e: any) {
+        const detail = e.response?.data?.detail || 'Failed to purge findings'
+        toast.add({ severity: 'error', summary: 'Error', detail, life: 3000 })
+      }
+    },
+  })
 }
 
 // Handle query params for filtering

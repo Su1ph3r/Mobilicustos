@@ -1,4 +1,18 @@
 <script setup lang="ts">
+/**
+ * AppLayout - Main application layout shell with collapsible sidebar navigation.
+ *
+ * Features:
+ * - Responsive sidebar with expand/collapse toggle and mobile slide-out menu
+ * - Navigation items with active route highlighting and keyboard shortcuts
+ * - Dark mode toggle with localStorage persistence
+ * - Mobile-specific header with hamburger menu and overlay backdrop
+ * - Sidebar footer with shortcuts help, theme toggle, and collapse button
+ * - Keyboard shortcuts integration via useKeyboardShortcuts composable
+ *
+ * @requires useKeyboardShortcuts - provides keyboard shortcut handling and help dialog
+ * @requires KeyboardShortcutsHelp - shortcuts reference dialog component
+ */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
@@ -29,7 +43,10 @@ const menuItems = [
   { label: 'Secrets', icon: 'pi pi-key', route: '/secrets', shortcut: 'Alt+K' },
   { label: 'Scheduled Scans', icon: 'pi pi-clock', route: '/scheduled-scans', shortcut: '' },
   { label: 'Webhooks', icon: 'pi pi-bolt', route: '/webhooks', shortcut: '' },
+  { label: 'Bypass', icon: 'pi pi-shield', route: '/bypass', shortcut: '' },
   { label: 'Burp Suite', icon: 'pi pi-server', route: '/burp', shortcut: '' },
+  { label: 'API Endpoints', icon: 'pi pi-link', route: '/api-endpoints', shortcut: '' },
+  { label: 'Settings', icon: 'pi pi-cog', route: '/settings', shortcut: '' },
 ]
 
 // Check if mobile on mount and resize

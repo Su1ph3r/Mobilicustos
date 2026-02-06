@@ -1,7 +1,34 @@
-"""Privacy Compliance Analyzer.
+"""Privacy compliance analyzer for mobile application tracking and data collection.
 
-Analyzes apps for GDPR/CCPA compliance, PII collection,
-and tracking SDK identification.
+Performs comprehensive privacy analysis to detect tracking SDKs, personally
+identifiable information (PII) handling patterns, sensitive data collection
+APIs, and compliance gaps with GDPR, CCPA, and app store privacy policies.
+
+Analysis categories:
+    - **Tracking SDK Detection**: Identifies 16+ analytics, advertising,
+      crash reporting, and social login SDKs including Firebase Analytics,
+      Google Analytics, Mixpanel, Amplitude, Facebook Ads, AppsFlyer,
+      Adjust, Branch, Crashlytics, Sentry, Bugsnag, and more.
+    - **PII Handling Detection**: Searches for variable names and patterns
+      indicating handling of email, phone, SSN, credit card, password,
+      address, and date-of-birth data.
+    - **Data Collection API Detection**: Identifies platform-specific APIs
+      for accessing location, contacts, camera, microphone, calendar, SMS,
+      call logs, device IDs, and installed applications.
+    - **Permission Analysis**: Maps dangerous Android permissions and iOS
+      privacy usage description keys to privacy implications.
+    - **Privacy Policy Detection**: Checks application resources for
+      references to a privacy policy URL.
+
+OWASP references:
+    - MASVS-PRIVACY: Privacy Requirements
+    - MSTG-PRIVACY-1: Testing for PII Disclosure
+    - MSTG-PRIVACY-3: Testing for Tracking
+    - CWE-359: Exposure of Private Personal Information
+
+Supported tracking SDK vendors:
+    Google, Meta, Mixpanel, Amplitude, Segment, Yahoo, AppsFlyer,
+    Adjust, Branch, Sentry, Bugsnag
 """
 
 import logging
@@ -9,7 +36,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from api.models.database import MobileApp
+from api.models.database import Finding, MobileApp
 from api.services.analyzers.base_analyzer import BaseAnalyzer, AnalyzerResult
 
 logger = logging.getLogger(__name__)
@@ -289,66 +316,121 @@ DATA_COLLECTION_APIS = {
 
 
 class PrivacyAnalyzer(BaseAnalyzer):
-    """Analyzes apps for privacy compliance and tracking."""
+    """Analyzes mobile apps for privacy compliance and tracking SDKs.
+
+    Extracts the application archive, scans source code for tracking SDK
+    signatures, PII variable patterns, and platform-specific data collection
+    APIs. Also checks manifest/Info.plist for dangerous permissions and
+    searches application resources for privacy policy references.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        description: Human-readable description of analyzer purpose.
+    """
 
     name = "privacy_analyzer"
     description = "Detects tracking SDKs, PII collection, and privacy compliance issues"
 
-    async def analyze(self, app: MobileApp, extracted_path: Path) -> list[AnalyzerResult]:
-        """Analyze app for privacy issues."""
-        results = []
-        detected_trackers = []
-        pii_findings = []
-        data_collection_findings = []
+    async def analyze(self, app: MobileApp) -> list[Finding]:
+        """Analyze the application for privacy issues and tracking.
 
-        # Scan all source files
-        source_extensions = [".java", ".kt", ".swift", ".m", ".h", ".js", ".ts", ".dart"]
-        for ext in source_extensions:
-            for source_file in extracted_path.rglob(f"*{ext}"):
+        Args:
+            app: The mobile application to analyze.
+
+        Returns:
+            A list of Finding objects covering detected trackers, PII
+            handling, data collection APIs, permission analysis, and
+            privacy policy presence.
+        """
+        if not app.file_path:
+            return []
+
+        import shutil
+        import tempfile
+        import zipfile
+
+        extracted_path = None
+        try:
+            extracted_path = Path(tempfile.mkdtemp(prefix="privacy_"))
+            with zipfile.ZipFile(app.file_path, "r") as archive:
+                archive.extractall(extracted_path)
+
+            results = []
+            detected_trackers = []
+            pii_findings = []
+            data_collection_findings = []
+
+            # Scan all source files
+            source_extensions = [".java", ".kt", ".swift", ".m", ".h", ".js", ".ts", ".dart"]
+            for ext in source_extensions:
+                for source_file in extracted_path.rglob(f"*{ext}"):
+                    try:
+                        content = source_file.read_text(errors='ignore')
+                        rel_path = str(source_file.relative_to(extracted_path))
+
+                        # Check for tracking SDKs
+                        trackers = self._detect_trackers(content, rel_path)
+                        detected_trackers.extend(trackers)
+
+                        # Check for PII handling
+                        pii = self._detect_pii_handling(content, rel_path)
+                        pii_findings.extend(pii)
+
+                        # Check for data collection APIs
+                        collection = self._detect_data_collection(content, rel_path, app.platform)
+                        data_collection_findings.extend(collection)
+
+                    except Exception as e:
+                        logger.debug(f"Error analyzing {source_file}: {e}")
+
+            # Check manifest/Info.plist for permissions
+            permission_findings = await self._analyze_permissions(extracted_path, app.platform)
+
+            # Create findings
+            if detected_trackers:
+                results.extend(self._create_tracker_findings(detected_trackers, app))
+
+            if pii_findings:
+                results.append(self._create_pii_finding(pii_findings, app))
+
+            if data_collection_findings:
+                results.extend(self._create_data_collection_findings(data_collection_findings, app))
+
+            if permission_findings:
+                results.extend(permission_findings)
+
+            # Check for privacy policy
+            privacy_policy_result = await self._check_privacy_policy(extracted_path, app)
+            if privacy_policy_result:
+                results.append(privacy_policy_result)
+
+            # Convert AnalyzerResults to Findings
+            findings = []
+            for result in results:
+                findings.append(self.result_to_finding(app, result))
+
+            return findings
+
+        except Exception as e:
+            logger.error(f"Privacy analysis failed: {e}")
+            return []
+        finally:
+            if extracted_path and extracted_path.exists():
                 try:
-                    content = source_file.read_text(errors='ignore')
-                    rel_path = str(source_file.relative_to(extracted_path))
-
-                    # Check for tracking SDKs
-                    trackers = self._detect_trackers(content, rel_path)
-                    detected_trackers.extend(trackers)
-
-                    # Check for PII handling
-                    pii = self._detect_pii_handling(content, rel_path)
-                    pii_findings.extend(pii)
-
-                    # Check for data collection APIs
-                    collection = self._detect_data_collection(content, rel_path, app.platform)
-                    data_collection_findings.extend(collection)
-
-                except Exception as e:
-                    logger.debug(f"Error analyzing {source_file}: {e}")
-
-        # Check manifest/Info.plist for permissions
-        permission_findings = await self._analyze_permissions(extracted_path, app.platform)
-
-        # Create findings
-        if detected_trackers:
-            results.extend(self._create_tracker_findings(detected_trackers, app))
-
-        if pii_findings:
-            results.append(self._create_pii_finding(pii_findings, app))
-
-        if data_collection_findings:
-            results.extend(self._create_data_collection_findings(data_collection_findings, app))
-
-        if permission_findings:
-            results.extend(permission_findings)
-
-        # Check for privacy policy
-        privacy_policy_result = await self._check_privacy_policy(extracted_path, app)
-        if privacy_policy_result:
-            results.append(privacy_policy_result)
-
-        return results
+                    shutil.rmtree(extracted_path)
+                except Exception:
+                    pass
 
     def _detect_trackers(self, content: str, file_path: str) -> list[TrackerInfo]:
-        """Detect tracking SDKs in source code."""
+        """Detect tracking SDKs in source code via pattern matching.
+
+        Args:
+            content: Source file content to scan.
+            file_path: Relative path of the source file for evidence.
+
+        Returns:
+            A list of TrackerInfo instances for each detected SDK.
+        """
         detected = []
 
         for sdk_name, sdk_info in TRACKING_SDKS.items():
@@ -367,7 +449,16 @@ class PrivacyAnalyzer(BaseAnalyzer):
         return detected
 
     def _detect_pii_handling(self, content: str, file_path: str) -> list[dict]:
-        """Detect potential PII handling in code."""
+        """Detect potential PII handling in code via variable name patterns.
+
+        Args:
+            content: Source file content to scan.
+            file_path: Relative path of the source file for evidence.
+
+        Returns:
+            A list of dicts with 'type', 'pattern', 'matches', and
+            'file_path' keys for each detected PII variable pattern.
+        """
         findings = []
 
         # Check for PII variable names
@@ -394,7 +485,17 @@ class PrivacyAnalyzer(BaseAnalyzer):
         return findings
 
     def _detect_data_collection(self, content: str, file_path: str, platform: str) -> list[dict]:
-        """Detect sensitive data collection APIs."""
+        """Detect sensitive data collection APIs for the given platform.
+
+        Args:
+            content: Source file content to scan.
+            file_path: Relative path of the source file for evidence.
+            platform: Either "android" or "ios".
+
+        Returns:
+            A list of dicts with 'data_type', 'pattern', and 'file_path'
+            for each detected data collection API usage.
+        """
         findings = []
 
         if platform not in DATA_COLLECTION_APIS:

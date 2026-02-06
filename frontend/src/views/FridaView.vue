@@ -16,13 +16,17 @@
             <Dropdown
               v-model="selectedScript"
               :options="scripts"
-              optionLabel="name"
+              optionLabel="script_name"
               placeholder="Load Script"
               @change="loadScript"
             />
             <Button icon="pi pi-save" class="p-button-sm" v-tooltip="'Save Script'" @click="saveScript" />
             <Button icon="pi pi-plus" class="p-button-sm p-button-secondary" v-tooltip="'New Script'" @click="newScript" />
           </div>
+        </div>
+        <div v-if="scripts.length === 0" class="empty-scripts-notice">
+          <i class="pi pi-info-circle"></i>
+          <span>No scripts available. Scripts will be loaded when the database is seeded.</span>
         </div>
         <div class="script-info" v-if="currentScript.name">
           <span class="script-name">{{ currentScript.name }}</span>
@@ -100,6 +104,7 @@
               <Button
                 icon="pi pi-times"
                 class="p-button-sm p-button-danger p-button-text"
+                v-tooltip="'Detach Session'"
                 @click="detachSessionById(session.session_id)"
               />
             </div>
@@ -145,7 +150,7 @@
         <InputText v-model="librarySearch" placeholder="Search scripts..." />
       </div>
       <DataTable :value="filteredLibraryScripts" :paginator="true" :rows="5">
-        <Column field="name" header="Name" />
+        <Column field="script_name" header="Name" />
         <Column field="category" header="Category">
           <template #body="{ data }">
             <Tag :value="data.category" severity="secondary" />
@@ -197,6 +202,21 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * FridaView - Frida instrumentation console for dynamic runtime analysis.
+ *
+ * Features:
+ * - Script editor with load, save, and new script controls
+ * - Script library browser with category filtering and search
+ * - Device and application selection for injection targeting
+ * - Script injection with session management (attach/detach)
+ * - Active sessions list with per-session detach controls
+ * - Real-time output console with timestamped, color-coded log lines
+ *
+ * @requires fridaApi - script CRUD, injection, session management, and categories
+ * @requires useDevicesStore - provides connected device list for injection
+ * @requires useAppsStore - provides application list for injection targeting
+ */
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useDevicesStore } from '@/stores/devices'
 import { useAppsStore } from '@/stores/apps'
@@ -254,7 +274,7 @@ const saveForm = ref({
 const filteredLibraryScripts = computed(() => {
   return scripts.value.filter((s) => {
     if (libraryCategory.value && s.category !== libraryCategory.value) return false
-    if (librarySearch.value && !s.name.toLowerCase().includes(librarySearch.value.toLowerCase())) return false
+    if (librarySearch.value && !s.script_name.toLowerCase().includes(librarySearch.value.toLowerCase())) return false
     return true
   })
 })
@@ -263,9 +283,9 @@ function loadScript() {
   if (selectedScript.value) {
     currentScript.value = {
       id: selectedScript.value.script_id,
-      name: selectedScript.value.name,
+      name: selectedScript.value.script_name,
       category: selectedScript.value.category,
-      content: selectedScript.value.content,
+      content: selectedScript.value.script_content,
       description: selectedScript.value.description || '',
     }
   }
@@ -294,10 +314,10 @@ function saveScript() {
 async function confirmSaveScript() {
   try {
     const data = {
-      name: saveForm.value.name,
+      script_name: saveForm.value.name,
       category: saveForm.value.category,
       description: saveForm.value.description,
-      content: currentScript.value.content,
+      script_content: currentScript.value.content,
     }
 
     if (currentScript.value.id) {
@@ -322,9 +342,9 @@ async function confirmSaveScript() {
 function useLibraryScript(script: any) {
   currentScript.value = {
     id: null,
-    name: script.name + ' (copy)',
+    name: script.script_name + ' (copy)',
     category: script.category,
-    content: script.content,
+    content: script.script_content,
     description: script.description || '',
   }
   showLibraryDialog.value = false
@@ -665,9 +685,52 @@ onMounted(async () => {
   width: 100%;
 }
 
+.empty-scripts-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-ground);
+  color: var(--text-color-secondary);
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.empty-scripts-notice i {
+  color: var(--primary-color);
+}
+
 @media (max-width: 992px) {
   .frida-container {
     grid-template-columns: 1fr;
   }
+}
+
+/* Fix dropdown styling in dark mode */
+:deep(.p-dropdown) {
+  background: var(--surface-card);
+  border-color: var(--surface-border);
+}
+
+:deep(.p-dropdown .p-dropdown-label) {
+  color: var(--text-color);
+}
+
+:deep(.p-dropdown-panel) {
+  background: var(--surface-card);
+  border-color: var(--surface-border);
+}
+
+:deep(.p-dropdown-panel .p-dropdown-items .p-dropdown-item) {
+  color: var(--text-color);
+}
+
+:deep(.p-dropdown-panel .p-dropdown-items .p-dropdown-item:hover) {
+  background: var(--surface-hover);
+}
+
+:deep(.p-dropdown-panel .p-dropdown-items .p-dropdown-item.p-highlight) {
+  background: var(--primary-color);
+  color: #ffffff;
 }
 </style>

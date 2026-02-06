@@ -1,7 +1,27 @@
-"""
-iOS Binary Analyzer
+"""iOS Mach-O binary analyzer for security feature and vulnerability detection.
 
-Analyzes iOS Mach-O binaries for security issues.
+Performs static analysis of iOS application binaries (Mach-O format) to
+evaluate compilation security features and detect use of known-vulnerable
+C functions.
+
+Security checks performed:
+    - **PIE (Position Independent Executable)**: Verifies ASLR support
+      via the MH_PIE flag in the Mach-O header.
+    - **Stack Canaries**: Detects __stack_chk_fail and __stack_chk_guard
+      symbols indicating stack smashing protection.
+    - **ARC (Automatic Reference Counting)**: Checks for objc_release
+      and objc_retain symbols indicating memory-safe Objective-C.
+    - **Insecure Function Detection**: Scans symbol tables for dangerous
+      C functions (strcpy, strcat, sprintf, gets, scanf, NSLog, printf)
+      that are vulnerable to buffer overflows or format string attacks.
+    - **Encryption Detection**: Checks for encrypted binary segments
+      (LC_ENCRYPTION_INFO) indicating App Store encryption.
+
+OWASP references:
+    - MASVS-CODE: Code Quality
+    - MASVS-RESILIENCE: Resiliency Against Reverse Engineering
+    - CWE-120: Buffer Copy without Checking Size of Input
+    - CWE-134: Use of Externally-Controlled Format String
 """
 
 import zipfile
@@ -14,7 +34,18 @@ from ..ios_toolchain import get_ios_toolchain
 
 
 class iOSBinaryAnalyzer(BaseAnalyzer):
-    """Analyzer for iOS Mach-O binaries"""
+    """Analyzer for iOS Mach-O binary security features and vulnerabilities.
+
+    Uses the iOS toolchain to parse Mach-O headers, check compilation
+    flags (PIE, ARC, stack canaries), scan symbol tables for insecure
+    functions, and verify binary encryption status.
+
+    Attributes:
+        name: Analyzer identifier used by the scan orchestrator.
+        platform: Target platform ("ios").
+        INSECURE_FUNCTIONS: List of (function_name, description) tuples
+            for dangerous C functions to detect in symbol tables.
+    """
 
     name = "ios_binary_analyzer"
     platform = "ios"

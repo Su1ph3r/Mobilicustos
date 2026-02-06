@@ -1,4 +1,24 @@
-"""SSL/TLS Pinning analyzer for Android and iOS."""
+"""SSL/TLS certificate pinning analyzer for Android and iOS applications.
+
+Examines application binaries for SSL/TLS certificate pinning implementations
+and dangerous SSL bypass patterns. Supports both Android (DEX bytecode,
+Network Security Config) and iOS (Mach-O binaries, frameworks).
+
+Detection categories:
+    - **Pinning implementations**: OkHttp CertificatePinner, Network Security
+      Config ``<pin-set>``, TrustKit, custom TrustManager, Alamofire
+      ServerTrustManager, URLSession delegate, SecTrust API.
+    - **SSL bypass patterns** (CWE-295): TrustAllCerts, empty
+      checkServerTrusted, SslErrorHandler.proceed, ALLOW_ALL_HOSTNAME_VERIFIER.
+    - **Configuration issues**: Cleartext traffic permitted, user-installed
+      certificates trusted.
+
+OWASP references:
+    - MASVS-NETWORK-1, MASVS-NETWORK-2
+    - MASTG-TEST-0021, MASTG-TEST-0022, MASTG-TEST-0068
+    - CWE-295: Improper Certificate Validation
+    - CWE-319: Cleartext Transmission of Sensitive Information
+"""
 
 import logging
 import re
@@ -13,7 +33,24 @@ logger = logging.getLogger(__name__)
 
 
 class SSLPinningAnalyzer(BaseAnalyzer):
-    """Analyzes SSL/TLS pinning implementation or lack thereof."""
+    """Analyzes SSL/TLS pinning implementation and detects SSL bypass code.
+
+    Scans application binaries and configuration files for certificate
+    pinning implementations (positive security control) and SSL validation
+    bypass patterns (critical vulnerability). Produces both informational
+    findings for detected pinning and vulnerability findings for missing
+    or bypassed certificate validation.
+
+    Class-level pattern dictionaries define known pinning libraries and
+    bypass patterns for both Android and iOS platforms.
+
+    Attributes:
+        name: Analyzer identifier (``"ssl_pinning_analyzer"``).
+        platform: Target platform (``"cross-platform"``).
+        ANDROID_PINNING_PATTERNS: Regex patterns for Android pinning libraries.
+        IOS_PINNING_PATTERNS: Regex patterns for iOS pinning libraries.
+        BYPASS_PATTERNS: Regex patterns for SSL validation bypass code.
+    """
 
     name = "ssl_pinning_analyzer"
     platform = "cross-platform"
@@ -101,7 +138,18 @@ class SSLPinningAnalyzer(BaseAnalyzer):
     }
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze SSL/TLS pinning implementation."""
+        """Analyze the application for SSL/TLS pinning and bypass patterns.
+
+        Dispatches to platform-specific analysis (Android or iOS) based on
+        the app's platform field.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` and ``platform`` set.
+
+        Returns:
+            List of Finding objects including both positive (pinning found)
+            and negative (no pinning or bypass detected) findings.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -119,7 +167,12 @@ class SSLPinningAnalyzer(BaseAnalyzer):
         return findings
 
     async def _analyze_android(self, app: MobileApp) -> list[Finding]:
-        """Analyze Android app for SSL pinning."""
+        """Analyze an Android APK for SSL pinning implementations and bypasses.
+
+        Checks Network Security Config XML, scans DEX bytecode for pinning
+        library patterns and SSL bypass patterns, and produces a summary
+        finding indicating whether pinning was detected.
+        """
         findings: list[Finding] = []
         pinning_found = False
         bypass_found = False
@@ -276,7 +329,12 @@ OkHttpClient client = new OkHttpClient.Builder()
         app: MobileApp,
         apk: zipfile.ZipFile,
     ) -> list[Finding]:
-        """Check Android Network Security Config for pinning."""
+        """Check Android Network Security Config XML for pinning and misconfigurations.
+
+        Parses ``network_security_config.xml`` for ``<pin-set>`` elements
+        (positive), ``cleartextTrafficPermitted="true"`` (critical), and
+        ``<certificates src="user">`` (medium risk).
+        """
         findings = []
 
         try:
@@ -356,7 +414,11 @@ OkHttpClient client = new OkHttpClient.Builder()
         return findings
 
     async def _analyze_ios(self, app: MobileApp) -> list[Finding]:
-        """Analyze iOS app for SSL pinning."""
+        """Analyze an iOS IPA for SSL pinning implementations.
+
+        Scans Mach-O binaries and embedded frameworks for pinning library
+        references (TrustKit, Alamofire, URLSession delegates, SecTrust API).
+        """
         findings: list[Finding] = []
         pinning_found = False
         bypass_found = False
@@ -484,7 +546,17 @@ TrustKit.initSharedInstance(withConfiguration: trustKitConfig)''',
         pattern_info: dict[str, Any],
         file_path: str,
     ) -> Finding:
-        """Create a finding for SSL bypass detection."""
+        """Create a critical finding for detected SSL certificate validation bypass.
+
+        Args:
+            app: MobileApp ORM model for the scanned application.
+            pattern_name: Internal pattern identifier (e.g., ``"trust_all_certs"``).
+            pattern_info: Pattern dict with ``description`` and ``severity``.
+            file_path: Archive-relative path where the bypass was found.
+
+        Returns:
+            Finding ORM model for the SSL bypass vulnerability.
+        """
         return self.create_finding(
             app=app,
             title=f"SSL Certificate Validation Bypass: {pattern_info['description']}",

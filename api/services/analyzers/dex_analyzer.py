@@ -1,4 +1,21 @@
-"""DEX analyzer for Android bytecode analysis."""
+"""Android DEX bytecode analyzer for security vulnerability detection.
+
+Performs deep analysis of Dalvik Executable (DEX) bytecode within APK files
+using the androguard library. When androguard is unavailable, falls back to
+regex-based string pattern matching on raw DEX data.
+
+Security checks performed:
+    - **Weak cryptography** (CWE-327, MASVS-CRYPTO / MSTG-CRYPTO-4):
+      Detection of insecure algorithms (DES, RC4, MD5, SHA1, ECB mode).
+    - **Sensitive logging** (CWE-532, MASVS-STORAGE / MSTG-STORAGE-3):
+      Counting Android Log calls that may leak sensitive data.
+    - **WebView issues** (CWE-749, MASVS-PLATFORM / MSTG-PLATFORM-7):
+      JavaScript enabled, JS interfaces exposed, file access allowed.
+    - **SQL injection** (CWE-89, MASVS-CODE / MSTG-CODE-6):
+      Use of rawQuery/execSQL with potential string concatenation.
+    - **Insecure file operations** (CWE-732, MASVS-STORAGE / MSTG-STORAGE-2):
+      World-readable or world-writable file modes.
+"""
 
 import logging
 import re
@@ -13,13 +30,38 @@ logger = logging.getLogger(__name__)
 
 
 class DexAnalyzer(BaseAnalyzer):
-    """Analyzes Android DEX bytecode for security issues."""
+    """Analyzes Android DEX bytecode for security vulnerabilities.
+
+    Uses androguard to parse DEX files and inspect method-level bytecode
+    instructions for insecure API calls and patterns. Each finding includes
+    Frida hook scripts for runtime verification and jadx decompilation
+    commands for manual review.
+
+    When androguard is not installed (e.g., minimal Docker image), falls
+    back to ``_fallback_analysis()`` which uses regex matching on raw DEX
+    binary data.
+
+    Attributes:
+        name: Analyzer identifier (``"dex_analyzer"``).
+        platform: Target platform (``"android"`` only).
+    """
 
     name = "dex_analyzer"
     platform = "android"
 
     async def analyze(self, app: MobileApp) -> list[Finding]:
-        """Analyze DEX files in the APK."""
+        """Analyze all DEX files within the APK for security issues.
+
+        Loads each DEX file via androguard, creates cross-references, and
+        runs all check methods. Falls back to regex-based analysis if
+        androguard is not available.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` pointing to the APK.
+
+        Returns:
+            List of Finding objects for detected security issues.
+        """
         findings: list[Finding] = []
 
         if not app.file_path:
@@ -60,7 +102,14 @@ class DexAnalyzer(BaseAnalyzer):
         dvm: Any,
         analysis: Any,
     ) -> list[Finding]:
-        """Check for cryptographic issues."""
+        """Check for use of weak or deprecated cryptographic algorithms.
+
+        Inspects ``const-string`` bytecode instructions for algorithm names
+        passed to ``Cipher.getInstance()`` or ``MessageDigest.getInstance()``.
+        Detects: DES, DESede (3DES), RC4, MD5, SHA1, ECB mode.
+
+        Maps to: CWE-327, MASVS-CRYPTO, MSTG-CRYPTO-4, MASTG-TEST-0014.
+        """
         findings: list[Finding] = []
 
         weak_algorithms = {
@@ -136,7 +185,13 @@ class DexAnalyzer(BaseAnalyzer):
         dvm: Any,
         analysis: Any,
     ) -> list[Finding]:
-        """Check for sensitive data in logs."""
+        """Check for Android Log class usage that may leak sensitive data.
+
+        Counts invocations of ``Log.v/d/i/w/e`` across all methods. A high
+        count in release builds suggests logging is not being stripped.
+
+        Maps to: CWE-532, MASVS-STORAGE, MSTG-STORAGE-3, MASTG-TEST-0003.
+        """
         findings: list[Finding] = []
 
         log_methods = ["Log;->v", "Log;->d", "Log;->i", "Log;->w", "Log;->e"]
@@ -209,7 +264,14 @@ class DexAnalyzer(BaseAnalyzer):
         dvm: Any,
         analysis: Any,
     ) -> list[Finding]:
-        """Check for WebView security issues."""
+        """Check for insecure WebView configurations.
+
+        Detects calls to ``setJavaScriptEnabled``, ``addJavascriptInterface``,
+        and ``setAllowFileAccess`` which can expose the app to XSS, JavaScript
+        injection, and file exfiltration attacks.
+
+        Maps to: CWE-749, MASVS-PLATFORM, MSTG-PLATFORM-7, MASTG-TEST-0031.
+        """
         findings: list[Finding] = []
 
         webview_issues = {
@@ -281,7 +343,14 @@ class DexAnalyzer(BaseAnalyzer):
         dvm: Any,
         analysis: Any,
     ) -> list[Finding]:
-        """Check for SQL injection vulnerabilities."""
+        """Check for potential SQL injection via raw query methods.
+
+        Detects calls to ``rawQuery()`` and ``execSQL()`` on
+        ``SQLiteDatabase``, which are vulnerable to SQL injection if user
+        input is concatenated into the query string.
+
+        Maps to: CWE-89, MASVS-CODE, MSTG-CODE-6, MASTG-TEST-0025.
+        """
         findings: list[Finding] = []
 
         raw_query_methods = ["rawQuery", "execSQL"]
@@ -357,7 +426,13 @@ val cursor = db.rawQuery("SELECT * FROM users WHERE id=?", arrayOf(userInput))''
         dvm: Any,
         analysis: Any,
     ) -> list[Finding]:
-        """Check for insecure file operations."""
+        """Check for insecure file permission modes.
+
+        Detects use of ``MODE_WORLD_READABLE`` and ``MODE_WORLD_WRITEABLE``
+        with ``openFileOutput()``, which make files accessible to all apps.
+
+        Maps to: CWE-732, MASVS-STORAGE, MSTG-STORAGE-2, MASTG-TEST-0002.
+        """
         findings: list[Finding] = []
 
         insecure_modes = {
@@ -424,7 +499,18 @@ val cursor = db.rawQuery("SELECT * FROM users WHERE id=?", arrayOf(userInput))''
         return findings
 
     async def _fallback_analysis(self, app: MobileApp) -> list[Finding]:
-        """Fallback analysis when androguard is not available."""
+        """Regex-based fallback analysis when androguard is not available.
+
+        Reads raw DEX binary data from the APK and applies regex patterns
+        to detect cryptographic algorithm usage. Less precise than bytecode
+        analysis but works without androguard dependencies.
+
+        Args:
+            app: MobileApp ORM model with ``file_path`` pointing to the APK.
+
+        Returns:
+            List of Finding objects for detected weak crypto patterns.
+        """
         findings: list[Finding] = []
         found_issues: set[str] = set()  # Track unique issues
 

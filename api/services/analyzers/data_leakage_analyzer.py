@@ -1,4 +1,14 @@
-"""Data leakage analyzer for mobile applications."""
+"""Data leakage vector analyzer for mobile applications.
+
+Scans application binaries for patterns that indicate potential data leakage
+channels, including clipboard usage, screenshot exposure, pasteboard access,
+third-party analytics/tracking SDKs, and insecure inter-process communication.
+
+OWASP references:
+    - MASVS-STORAGE: Secure storage of sensitive data
+    - MASVS-PRIVACY: User privacy protection
+    - CWE-200: Exposure of Sensitive Information
+"""
 
 import logging
 import re
@@ -12,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class DataLeakageAnalyzer(BaseAnalyzer):
-    """Analyzes data leakage vectors in mobile applications."""
+    """Analyzes data leakage vectors in mobile applications.
+
+    Detects clipboard data exposure, screenshot vulnerability, third-party
+    SDK data sharing, and unprotected IPC channels that could leak sensitive
+    information to other applications or the system.
+    """
 
     name = "data_leakage_analyzer"
     platform = "cross-platform"
