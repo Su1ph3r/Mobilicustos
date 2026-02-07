@@ -90,6 +90,7 @@ STATIC_ANALYZERS = {
         "flutter_analyzer",
         "react_native_analyzer",
         "ml_model_analyzer",
+        "xamarin_analyzer",
     ],
 }
 
@@ -422,6 +423,9 @@ class ScanOrchestrator:
             elif analyzer_name == "semgrep_analyzer":
                 from api.services.analyzers.semgrep_analyzer import SemgrepAnalyzer
                 analyzer = SemgrepAnalyzer()
+            elif analyzer_name == "xamarin_analyzer":
+                from api.services.analyzers.xamarin_analyzer import XamarinAnalyzer
+                analyzer = XamarinAnalyzer()
             else:
                 logger.warning(f"Unknown analyzer: {analyzer_name}")
                 return []

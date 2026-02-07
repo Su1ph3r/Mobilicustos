@@ -34,6 +34,8 @@ class CVEDetector:
         nvd_api_key: str | None = None,
         enable_nvd: bool = True,
         enable_osv: bool = True,
+        redis_client: Any = None,
+        enable_epss: bool = True,
     ):
         """Initialize CVE detector.
 
@@ -41,11 +43,28 @@ class CVEDetector:
             nvd_api_key: NVD API key for higher rate limits
             enable_nvd: Enable NVD queries
             enable_osv: Enable OSV queries
+            redis_client: Optional Redis client for caching
+            enable_epss: Enable EPSS score enrichment
         """
         self.fingerprinter = LibraryFingerprinter()
         self.cpe_matcher = CPEMatcher()
         self.osv_client = OSVClient() if enable_osv else None
         self.nvd_client = NVDClient(api_key=nvd_api_key) if enable_nvd else None
+
+        # Optional cache
+        self.cache = None
+        if redis_client:
+            from api.services.cve.cache import CVECache
+            self.cache = CVECache(redis_client=redis_client)
+
+        # Optional EPSS enrichment
+        self.epss_client = None
+        if enable_epss:
+            try:
+                from api.services.cve.sources.epss_client import EPSSClient
+                self.epss_client = EPSSClient()
+            except ImportError:
+                pass
 
     async def detect_all(
         self,
@@ -102,25 +121,83 @@ class CVEDetector:
         # Step 3: Deduplicate results
         unique_vulns = self._deduplicate_vulnerabilities(vulnerabilities)
 
+        # Step 4: Enrich with EPSS scores
+        if self.epss_client and unique_vulns:
+            await self._enrich_with_epss(unique_vulns)
+
         logger.info(f"Found {len(unique_vulns)} unique vulnerabilities")
         return unique_vulns
+
+    async def _enrich_with_epss(
+        self, vulnerabilities: list[LibraryVulnerability]
+    ) -> None:
+        """Enrich vulnerabilities with EPSS exploit probability scores."""
+        cve_ids = [
+            v.cve.cve_id for v in vulnerabilities
+            if v.cve.cve_id.startswith("CVE-")
+        ]
+        if not cve_ids:
+            return
+
+        try:
+            scores = await self.epss_client.get_scores(cve_ids)
+            for vuln in vulnerabilities:
+                score = scores.get(vuln.cve.cve_id)
+                if score:
+                    vuln.cve.epss_score = score.epss_score
+                    vuln.cve.epss_percentile = score.percentile
+        except Exception as e:
+            logger.warning(f"EPSS enrichment failed: {e}")
 
     async def _query_osv(
         self,
         libraries: list[DetectedLibrary],
     ) -> list[LibraryVulnerability]:
-        """Query OSV for all libraries."""
+        """Query OSV for all libraries, using cache when available."""
         vulnerabilities = []
 
         if not self.osv_client:
             return vulnerabilities
 
-        # Use batch query for efficiency
-        results = await self.osv_client.query_batch(libraries)
+        # Separate cached vs uncached libraries
+        uncached_libs = []
+        cached_results: dict[str, list[CVEInfo]] = {}
+
+        if self.cache:
+            for lib in libraries:
+                key = f"{lib.name}:{lib.version or 'unknown'}"
+                cached = await self.cache.get_library_cves(lib.name, lib.version or "unknown")
+                if cached is not None:
+                    cached_results[key] = [
+                        CVEInfo(**entry) for entry in cached
+                    ]
+                else:
+                    uncached_libs.append(lib)
+        else:
+            uncached_libs = list(libraries)
+
+        # Batch query only uncached libraries
+        if uncached_libs:
+            results = await self.osv_client.query_batch(uncached_libs)
+
+            # Cache the results
+            if self.cache:
+                for lib in uncached_libs:
+                    key = f"{lib.name}:{lib.version or 'unknown'}"
+                    cves = results.get(key, [])
+                    await self.cache.set_library_cves(
+                        lib.name, lib.version or "unknown",
+                        [self._cve_to_dict(c) for c in cves],
+                    )
+        else:
+            results = {}
+
+        # Merge cached + fresh results
+        all_results = {**cached_results, **results}
 
         for lib in libraries:
             key = f"{lib.name}:{lib.version or 'unknown'}"
-            cves = results.get(key, [])
+            cves = all_results.get(key, [])
 
             for cve in cves:
                 vulnerabilities.append(LibraryVulnerability(
@@ -131,6 +208,22 @@ class CVEDetector:
                 ))
 
         return vulnerabilities
+
+    @staticmethod
+    def _cve_to_dict(cve: CVEInfo) -> dict:
+        """Serialize CVEInfo to a dict for caching."""
+        return {
+            "cve_id": cve.cve_id,
+            "description": cve.description,
+            "severity": cve.severity,
+            "cvss_v3_score": str(cve.cvss_v3_score) if cve.cvss_v3_score else None,
+            "cvss_v3_vector": cve.cvss_v3_vector,
+            "cwe_ids": cve.cwe_ids,
+            "affected_versions": cve.affected_versions,
+            "fixed_versions": cve.fixed_versions,
+            "references": cve.references,
+            "exploit_available": cve.exploit_available,
+        }
 
     async def _query_nvd(
         self,

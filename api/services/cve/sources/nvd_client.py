@@ -1,7 +1,13 @@
-"""NVD (National Vulnerability Database) API client."""
+"""NVD (National Vulnerability Database) API client.
 
+Includes rate limiting (6s without API key, 0.6s with key) and
+retry with exponential backoff (3 attempts).
+"""
+
+import asyncio
 import logging
 import os
+import time
 from decimal import Decimal
 from datetime import datetime
 from typing import Any
@@ -17,7 +23,13 @@ NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 
 class NVDClient:
-    """Client for NVD CVE database."""
+    """Client for NVD CVE database.
+
+    Includes rate limiting and retry with exponential backoff.
+    """
+
+    # Rate limits: 6 seconds between requests without API key, 0.6s with key
+    MAX_RETRIES = 3
 
     def __init__(
         self,
@@ -33,6 +45,9 @@ class NVDClient:
         self.api_key = api_key or os.getenv("NVD_API_KEY")
         self.timeout = timeout
         self.base_url = NVD_API_URL
+        self._rate_interval = 0.6 if self.api_key else 6.0
+        self._semaphore = asyncio.Semaphore(1)
+        self._last_request_time: float = 0
 
     async def query_by_cpe(
         self,
@@ -120,7 +135,7 @@ class NVDClient:
         return await self._query(params)
 
     async def _query(self, params: dict[str, Any]) -> list[CVEInfo]:
-        """Execute NVD API query.
+        """Execute NVD API query with rate limiting and retry.
 
         Args:
             params: Query parameters
@@ -132,30 +147,46 @@ class NVDClient:
         if self.api_key:
             headers["apiKey"] = self.api_key
 
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    self.base_url,
-                    params=params,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
+        for attempt in range(self.MAX_RETRIES):
+            async with self._semaphore:
+                now = time.monotonic()
+                elapsed = now - self._last_request_time
+                if elapsed < self._rate_interval:
+                    await asyncio.sleep(self._rate_interval - elapsed)
+                self._last_request_time = time.monotonic()
 
-                return self._parse_response(data)
+                try:
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        response = await client.get(
+                            self.base_url,
+                            params=params,
+                            headers=headers,
+                        )
+                        response.raise_for_status()
+                        data = response.json()
 
-        except httpx.TimeoutException:
-            logger.warning("NVD query timeout")
-            return []
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
-                logger.warning("NVD rate limit exceeded. Consider using an API key.")
-            else:
-                logger.warning(f"NVD query failed: {e}")
-            return []
-        except Exception as e:
-            logger.warning(f"NVD query error: {e}")
-            return []
+                        return self._parse_response(data)
+
+                except httpx.TimeoutException:
+                    logger.warning(f"NVD query timeout (attempt {attempt + 1}/{self.MAX_RETRIES})")
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 403:
+                        logger.warning("NVD rate limit exceeded, backing off")
+                    elif e.response.status_code >= 500:
+                        logger.warning(f"NVD server error (attempt {attempt + 1}): {e}")
+                    else:
+                        logger.warning(f"NVD query failed: {e}")
+                        return []  # Don't retry client errors
+                except Exception as e:
+                    logger.warning(f"NVD query error (attempt {attempt + 1}): {e}")
+
+            # Exponential backoff before retry (outside semaphore to not block others)
+            if attempt < self.MAX_RETRIES - 1:
+                backoff = (2 ** attempt) * self._rate_interval
+                logger.info(f"Retrying NVD query in {backoff:.1f}s")
+                await asyncio.sleep(backoff)
+
+        return []
 
     def _parse_response(self, data: dict) -> list[CVEInfo]:
         """Parse NVD API response."""

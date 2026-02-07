@@ -57,6 +57,8 @@ class CVEInfo:
     published_date: datetime | None = None
     last_modified: datetime | None = None
     exploit_available: bool = False
+    epss_score: Decimal | None = None        # Exploit probability (0.0-1.0)
+    epss_percentile: Decimal | None = None   # Percentile rank (0.0-1.0)
 
 
 @dataclass

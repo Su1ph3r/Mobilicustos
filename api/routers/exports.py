@@ -175,8 +175,32 @@ def _export_csv(app: MobileApp | None, findings: list[Finding]) -> StreamingResp
     )
 
 
+def _build_rule_tags(finding: Finding) -> list[str]:
+    """Build SARIF rule tags from finding metadata."""
+    tags = []
+    if finding.cwe_id:
+        tags.append(f"external/cwe/{finding.cwe_id}")
+    if finding.owasp_masvs_category:
+        tags.append(f"external/owasp/{finding.owasp_masvs_category}")
+    if finding.severity:
+        tags.append(f"security/severity/{finding.severity}")
+    tags.append("security")
+    return tags
+
+
 def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingResponse:
-    """Export findings in SARIF format (Static Analysis Results Interchange Format)."""
+    """Export findings in SARIF format (Static Analysis Results Interchange Format).
+
+    Produces a SARIF 2.1.0 compliant document with enriched metadata including:
+    - Full rule descriptions with remediation help text
+    - CWE taxonomy references and rule relationships
+    - Cross-run fingerprints using canonical IDs
+    - Code snippets in location regions
+    - CVSS scores and OWASP categories in result properties
+    """
+    # Collect unique CWE IDs for taxonomy
+    cwe_ids_seen: set[str] = set()
+
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
@@ -195,42 +219,115 @@ def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingRe
         ],
     }
 
+    run = sarif["runs"][0]
+
     # Build rules and results
-    rules_map = {}
+    rules_map: dict[str, dict] = {}
     for f in findings:
         rule_id = f.category or f.tool
         if rule_id not in rules_map:
-            rules_map[rule_id] = {
+            rule = {
                 "id": rule_id,
                 "name": rule_id,
                 "shortDescription": {"text": f.category or f.tool},
+                "fullDescription": {"text": f.description[:1000] if f.description else f.title},
+                "help": {
+                    "text": f.remediation or "No remediation guidance available.",
+                    "markdown": f"**Remediation:** {f.remediation}" if f.remediation else "",
+                },
                 "defaultConfiguration": {
                     "level": _severity_to_sarif_level(f.severity)
                 },
+                "properties": {
+                    "tags": _build_rule_tags(f),
+                },
             }
 
+            # Add CWE relationship
+            if f.cwe_id:
+                cwe_ids_seen.add(f.cwe_id)
+                cwe_num = f.cwe_id.replace("CWE-", "")
+                rule["relationships"] = [
+                    {
+                        "target": {
+                            "id": f.cwe_id,
+                            "guid": f"cwe-{cwe_num}",
+                            "toolComponent": {"name": "CWE"},
+                        },
+                        "kinds": ["superset"],
+                    }
+                ]
+
+            rules_map[rule_id] = rule
+
+        # Build result
+        message_parts = [f.title]
+        if f.description and f.description != f.title:
+            message_parts.append(f.description[:500])
         result = {
             "ruleId": rule_id,
             "level": _severity_to_sarif_level(f.severity),
-            "message": {"text": f.title},
+            "message": {"text": " — ".join(message_parts)},
             "locations": [],
         }
 
+        # Fingerprints for cross-run matching
+        if hasattr(f, "canonical_id") and f.canonical_id:
+            result["fingerprints"] = {
+                "mobilicustos/canonical/v1": f.canonical_id,
+            }
+
+        # Location with code snippet
         if f.file_path:
-            location = {
+            location: dict = {
                 "physicalLocation": {
                     "artifactLocation": {"uri": f.file_path},
                 }
             }
+            region: dict = {}
             if f.line_number:
-                location["physicalLocation"]["region"] = {
-                    "startLine": f.line_number
-                }
+                region["startLine"] = f.line_number
+            if f.code_snippet:
+                region["snippet"] = {"text": f.code_snippet[:2000]}
+            if region:
+                location["physicalLocation"]["region"] = region
             result["locations"].append(location)
 
-        sarif["runs"][0]["results"].append(result)
+        # Result-level properties
+        props: dict = {}
+        if f.severity:
+            props["severity"] = f.severity
+        if f.cvss_score is not None:
+            props["cvssScore"] = float(f.cvss_score)
+        if f.owasp_masvs_category:
+            props["owaspCategory"] = f.owasp_masvs_category
+        if f.cwe_id:
+            props["cweId"] = f.cwe_id
+        if props:
+            result["properties"] = props
 
-    sarif["runs"][0]["tool"]["driver"]["rules"] = list(rules_map.values())
+        run["results"].append(result)
+
+    run["tool"]["driver"]["rules"] = list(rules_map.values())
+
+    # Add CWE taxonomy if any findings reference CWEs
+    if cwe_ids_seen:
+        taxa = []
+        for cwe_id in sorted(cwe_ids_seen):
+            cwe_num = cwe_id.replace("CWE-", "")
+            taxa.append({
+                "id": cwe_id,
+                "guid": f"cwe-{cwe_num}",
+                "shortDescription": {"text": cwe_id},
+            })
+        run["taxonomies"] = [
+            {
+                "name": "CWE",
+                "version": "4.13",
+                "informationUri": "https://cwe.mitre.org/",
+                "taxa": taxa,
+            }
+        ]
 
     filename = f"{app.package_name}_findings.sarif" if app else "all_findings.sarif"
     content = json.dumps(sarif, indent=2)

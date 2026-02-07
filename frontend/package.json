@@ -11,7 +11,9 @@
     "type-check": "vue-tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test --config=e2e/playwright.config.ts",
+    "e2e:headed": "playwright test --config=e2e/playwright.config.ts --headed"
   },
   "dependencies": {
     "@primevue/themes": "^4.5.4",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "@pinia/testing": "^0.1.6",
+    "@playwright/test": "^1.58.2",
     "@testing-library/vue": "^8.1.0",
     "@tsconfig/node22": "^22.0.0",
     "@types/node": "^22.10.5",

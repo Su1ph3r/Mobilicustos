@@ -34,6 +34,7 @@ get_settings.cache_clear()
 
 from api.main import app
 from api.database import get_db
+from api.models.database import MobileApp
 
 
 # Mock result that returns None for scalar_one_or_none
@@ -330,6 +331,67 @@ def sample_android_manifest():
 
     </application>
 </manifest>"""
+
+
+def create_test_archive(tmp_path, files: dict[str, str | bytes], suffix: str = ".apk") -> str:
+    """Create a test zip archive with given file contents.
+
+    Args:
+        tmp_path: pytest tmp_path fixture
+        files: Dict mapping archive-relative paths to content (str or bytes)
+        suffix: File extension for the archive (default: .apk)
+
+    Returns:
+        Absolute path to the created archive
+    """
+    import zipfile
+
+    archive_path = tmp_path / f"test_app{suffix}"
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        for path, content in files.items():
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            zf.writestr(path, content)
+    return str(archive_path)
+
+
+def make_mock_app(
+    tmp_path,
+    files: dict[str, str | bytes] | None = None,
+    platform: str = "android",
+    package_name: str = "com.example.testapp",
+    suffix: str = ".apk",
+) -> MobileApp:
+    """Create a MobileApp instance with an optional test archive.
+
+    Args:
+        tmp_path: pytest tmp_path fixture
+        files: Optional dict of archive files to create
+        platform: App platform (android/ios)
+        package_name: App package name
+        suffix: Archive suffix
+
+    Returns:
+        MobileApp instance with file_path set
+    """
+    from api.models.database import MobileApp as MobileAppModel
+
+    file_path = None
+    if files is not None:
+        file_path = create_test_archive(tmp_path, files, suffix)
+
+    app = MobileAppModel(
+        app_id=f"test-{uuid4().hex[:8]}",
+        package_name=package_name,
+        app_name="Test App",
+        version_name="1.0.0",
+        version_code=1,
+        platform=platform,
+        status="ready",
+        file_hash_sha256="test_hash",
+        file_path=file_path,
+    )
+    return app
 
 
 @pytest.fixture

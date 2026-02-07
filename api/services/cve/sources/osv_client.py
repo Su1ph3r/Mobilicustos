@@ -105,20 +105,26 @@ class OSVClient:
         if not queries:
             return results
 
+        # Chunk into batches of 50 to avoid OSV API limits
+        batch_size = 50
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout * 2) as client:
-                response = await client.post(
-                    f"{self.base_url}/querybatch",
-                    json={"queries": queries},
-                )
-                response.raise_for_status()
-                data = response.json()
+                for chunk_start in range(0, len(queries), batch_size):
+                    chunk = queries[chunk_start:chunk_start + batch_size]
+                    response = await client.post(
+                        f"{self.base_url}/querybatch",
+                        json={"queries": chunk},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
 
-                for i, result in enumerate(data.get("results", [])):
-                    library = lib_indices.get(i)
-                    if library:
-                        key = f"{library.name}:{library.version or 'unknown'}"
-                        results[key] = self._parse_response(result)
+                    for i, result in enumerate(data.get("results", [])):
+                        abs_idx = chunk_start + i
+                        library = lib_indices.get(abs_idx)
+                        if library:
+                            key = f"{library.name}:{library.version or 'unknown'}"
+                            results[key] = self._parse_response(result)
 
         except Exception as e:
             logger.warning(f"OSV batch query failed: {e}")
