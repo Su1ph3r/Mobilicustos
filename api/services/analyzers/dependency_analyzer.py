@@ -568,7 +568,8 @@ class DependencyAnalyzer(BaseAnalyzer):
         app: MobileApp
     ) -> AnalyzerResult:
         """Create a finding for a vulnerable dependency."""
-        highest_severity = max(vulns, key=lambda v: ["info", "low", "medium", "high", "critical"].index(v.severity))
+        severity_order = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        highest_severity = max(vulns, key=lambda v: severity_order.get(v.severity, 2))
 
         vuln_ids = [v.id for v in vulns]
         vuln_summaries = "\n".join([f"- {v.id}: {v.summary}" for v in vulns[:5]])

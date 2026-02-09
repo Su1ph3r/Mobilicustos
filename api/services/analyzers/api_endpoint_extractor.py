@@ -410,7 +410,7 @@ class APIEndpointExtractor(BaseAnalyzer):
                 if host not in hosts:
                     hosts[host] = []
                 hosts[host].append(ep)
-            except:
+            except Exception:
                 pass
 
         host_summary = "\n".join([
@@ -612,7 +612,7 @@ class APIEndpointExtractor(BaseAnalyzer):
     <method>{ep.method or 'GET'}</method>
     <path>{path}</path>
   </item>""")
-            except:
+            except Exception:
                 pass
 
         return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -720,7 +720,7 @@ class APIEndpointExtractor(BaseAnalyzer):
                         "200": {"description": "Success"}
                     }
                 }
-            except:
+            except Exception:
                 pass
 
         return {

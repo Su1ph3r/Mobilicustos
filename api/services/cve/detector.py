@@ -15,6 +15,7 @@ from api.models.database import MobileApp
 from api.services.cve.models import (
     CVEInfo,
     DetectedLibrary,
+    DetectionMethod,
     LibrarySource,
     LibraryVulnerability,
 )
@@ -96,11 +97,19 @@ class CVEDetector:
         # Add pre-parsed dependencies if provided
         if dependencies:
             for dep in dependencies:
+                try:
+                    det_method = DetectionMethod(dep.get("detection_method", "manifest"))
+                except ValueError:
+                    det_method = DetectionMethod.MANIFEST
+                try:
+                    lib_source = LibrarySource(dep.get("source", "gradle"))
+                except ValueError:
+                    lib_source = LibrarySource.GRADLE
                 detected_libs.append(DetectedLibrary(
                     name=dep.get("name", ""),
                     version=dep.get("version"),
-                    source=LibrarySource(dep.get("source", "gradle")),
-                    detection_method=dep.get("detection_method", "manifest"),
+                    source=lib_source,
+                    detection_method=det_method,
                     file_path=dep.get("file_path"),
                     confidence=0.95,
                 ))
@@ -427,6 +436,21 @@ class CVEDetector:
             },
         }
 
+    @staticmethod
+    def _effective_severity(cve: CVEInfo) -> str:
+        """Compute CVSS-adjusted severity, matching _vulnerability_to_finding logic."""
+        if cve.cvss_v3_score:
+            score = float(cve.cvss_v3_score)
+            if score >= 9.0:
+                return "critical"
+            elif score >= 7.0:
+                return "high"
+            elif score >= 4.0:
+                return "medium"
+            else:
+                return "low"
+        return cve.severity
+
     def _create_summary_finding(
         self,
         vulnerabilities: list[LibraryVulnerability],
@@ -434,11 +458,11 @@ class CVEDetector:
         scan_id: str | None,
     ) -> dict[str, Any]:
         """Create a summary finding for all vulnerabilities."""
-        # Count by severity
-        critical = sum(1 for v in vulnerabilities if v.cve.severity == "critical")
-        high = sum(1 for v in vulnerabilities if v.cve.severity == "high")
-        medium = sum(1 for v in vulnerabilities if v.cve.severity == "medium")
-        low = sum(1 for v in vulnerabilities if v.cve.severity == "low")
+        # Count by CVSS-adjusted severity (consistent with individual findings)
+        critical = sum(1 for v in vulnerabilities if self._effective_severity(v.cve) == "critical")
+        high = sum(1 for v in vulnerabilities if self._effective_severity(v.cve) == "high")
+        medium = sum(1 for v in vulnerabilities if self._effective_severity(v.cve) == "medium")
+        low = sum(1 for v in vulnerabilities if self._effective_severity(v.cve) == "low")
 
         # Unique libraries affected
         affected_libs = set(v.library.name for v in vulnerabilities)

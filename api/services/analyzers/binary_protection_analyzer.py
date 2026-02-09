@@ -203,7 +203,7 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                 if re.search(r"minifyEnabled\s*=?\s*true", content):
                     obfuscation_detected = True
                     obfuscation_tool = "R8/ProGuard"
-            except:
+            except (OSError, UnicodeDecodeError):
                 pass
 
         # Check for obfuscated class names in smali/dex
@@ -318,7 +318,7 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                                     b'\xca\xfe\xba\xbe', b'\xcf\xfa\xed\xfe']:
                             binary_path = f
                             break
-                except:
+                except (OSError, UnicodeDecodeError):
                     pass
 
         if binary_path:
@@ -377,7 +377,7 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                     for pattern in jailbreak_patterns:
                         if re.search(pattern, content, re.IGNORECASE):
                             jailbreak_detection_found.append(pattern)
-                except:
+                except (OSError, UnicodeDecodeError):
                     pass
 
         protections["root_jailbreak_detection"] = {
@@ -401,7 +401,7 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                     for pattern in ios_anti_debug_patterns:
                         if re.search(pattern, content, re.IGNORECASE):
                             anti_debug_found.append(pattern)
-                except:
+                except (OSError, UnicodeDecodeError):
                     pass
 
         protections["anti_debugging"] = {

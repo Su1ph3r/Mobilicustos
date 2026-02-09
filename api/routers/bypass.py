@@ -126,6 +126,7 @@ async def attempt_bypass(
             device=device,
             detection_type=detection_type,
             script=script,
+            db=db,
         )
 
         # Save result

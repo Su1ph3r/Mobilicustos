@@ -48,6 +48,13 @@ class DockerExecutor:
         # Shared analyzer temp path - same on host and in container
         self._analyzer_temp_path = os.environ.get("ANALYZER_TEMP_PATH", "/tmp/mobilicustos_analyzer")
 
+    def close(self) -> None:
+        """Close the Docker client and release its connection pool."""
+        try:
+            self.client.close()
+        except Exception:
+            pass
+
     def _container_to_host_path(self, container_path: Path) -> Path:
         """Convert a container path to the corresponding host path.
 

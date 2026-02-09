@@ -46,7 +46,7 @@ class CVECache:
             if data:
                 return json.loads(data)
         except Exception as e:
-            logger.debug(f"Cache get failed for {key}: {e}")
+            logger.warning(f"Cache get failed for {key}: {e}")
         return None
 
     async def set_cve(self, cve_id: str, data: dict) -> None:
@@ -60,7 +60,7 @@ class CVECache:
         try:
             await self.redis.set(key, json.dumps(data, default=str), ex=self.ttl)
         except Exception as e:
-            logger.debug(f"Cache set failed for {key}: {e}")
+            logger.warning(f"Cache set failed for {key}: {e}")
 
     @staticmethod
     def _sanitize_key(value: str) -> str:
@@ -83,7 +83,7 @@ class CVECache:
             if data:
                 return json.loads(data)
         except Exception as e:
-            logger.debug(f"Cache get failed for {key}: {e}")
+            logger.warning(f"Cache get failed for {key}: {e}")
         return None
 
     async def set_library_cves(self, name: str, version: str, cves: list[dict]) -> None:
@@ -98,14 +98,14 @@ class CVECache:
         try:
             await self.redis.set(key, json.dumps(cves, default=str), ex=self.ttl)
         except Exception as e:
-            logger.debug(f"Cache set failed for {key}: {e}")
+            logger.warning(f"Cache set failed for {key}: {e}")
 
     async def invalidate_cve(self, cve_id: str) -> None:
         """Remove a specific CVE from cache."""
         try:
             await self.redis.delete(f"cve:{cve_id}")
         except Exception as e:
-            logger.debug(f"Cache invalidate failed for {cve_id}: {e}")
+            logger.warning(f"Cache invalidate failed for {cve_id}: {e}")
 
     async def clear_all(self) -> int:
         """Clear all CVE cache entries.
@@ -122,5 +122,5 @@ class CVECache:
                 await self.redis.delete(key)
                 count += 1
         except Exception as e:
-            logger.debug(f"Cache clear failed: {e}")
+            logger.warning(f"Cache clear failed: {e}")
         return count

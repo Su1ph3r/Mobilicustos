@@ -603,8 +603,8 @@ class FlutterAnalyzer(BaseAnalyzer):
                             vulns = data.get("vulns", [])
                             if vulns:
                                 vulnerable_pkgs.append((pkg_name, pkg_version, vulns))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"OSV vulnerability check failed for {pkg_name} {pkg_version}: {e}")
 
             for pkg_name, pkg_version, vulns in vulnerable_pkgs:
                 vuln_ids = [v.get("id", "?") for v in vulns[:5]]

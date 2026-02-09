@@ -201,7 +201,8 @@ async def get_app_compliance(
         category, control, severity, status, count = row
         if category in compliance:
             compliance[category]["findings"]["total"] += count
-            compliance[category]["findings"][severity] += count
+            if severity in compliance[category]["findings"]:
+                compliance[category]["findings"][severity] += count
 
             if status == "open":
                 compliance[category]["findings"]["open"] += count

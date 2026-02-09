@@ -185,7 +185,8 @@ class SemgrepAnalyzer(BaseAnalyzer):
                 timeout=300,  # 5 minute timeout
             )
 
-            if result.returncode != 0:
+            # Exit code 0 = no findings, 1 = findings found, 2+ = actual error
+            if result.returncode not in (0, 1):
                 logger.error(f"Semgrep failed with exit code {result.returncode}: {result.stderr}")
                 return None
 

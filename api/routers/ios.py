@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Any, Optional
 from ..services.ios_toolchain import get_ios_toolchain, CorelliumClient
 
-router = APIRouter(prefix="/ios", tags=["iOS"])
+router = APIRouter(tags=["iOS"])
 
 
 class CorelliumConfig(BaseModel):

@@ -132,13 +132,21 @@ async def run_scan(scan_id: UUID) -> None:
                 await db.commit()
                 return
 
+            # Only start if scan is still pending (may have been cancelled)
+            if scan.status != "pending":
+                logger.info(f"Scan {scan_id} is no longer pending (status={scan.status}), skipping")
+                return
+
             # Update scan status
             scan.status = "running"
             scan.started_at = datetime.utcnow()
             await db.commit()
 
             orchestrator = ScanOrchestrator(db)
-            await orchestrator.execute_scan(scan, app)
+            try:
+                await orchestrator.execute_scan(scan, app)
+            finally:
+                orchestrator.close()
 
         except Exception as e:
             logger.error(f"Scan failed: {e}")
@@ -175,6 +183,13 @@ class ScanOrchestrator:
         self.docker = DockerExecutor()
         self.findings: list[Finding] = []
 
+    def close(self) -> None:
+        """Close resources held by the orchestrator."""
+        try:
+            self.docker.close()
+        except Exception:
+            pass
+
     async def execute_scan(self, scan: Scan, app: MobileApp) -> None:
         """Execute a complete scan by running all configured analyzers sequentially.
 
@@ -196,6 +211,14 @@ class ScanOrchestrator:
             analyzers = self._get_analyzers(scan, app)
             total_analyzers = len(analyzers)
 
+            if total_analyzers == 0:
+                scan.status = "completed"
+                scan.progress = 100
+                scan.completed_at = datetime.utcnow()
+                scan.findings_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+                await self.db.commit()
+                return
+
             logger.info(f"Starting scan with {total_analyzers} analyzers")
 
             # Run each analyzer
@@ -203,6 +226,7 @@ class ScanOrchestrator:
                 if scan.status == "cancelled":
                     break
 
+                findings: list = []
                 try:
                     # Update progress
                     scan.current_analyzer = analyzer_name
@@ -237,7 +261,9 @@ class ScanOrchestrator:
                 except Exception as e:
                     logger.error(f"Analyzer {analyzer_name} failed: {e}")
                     await self.db.rollback()
-                    scan.analyzer_errors = scan.analyzer_errors + [
+                    # Remove findings from the failed analyzer (they were rolled back in DB)
+                    self.findings = [f for f in self.findings if f not in findings]
+                    scan.analyzer_errors = (scan.analyzer_errors or []) + [
                         {"analyzer": analyzer_name, "error": str(e)[:200]}
                     ]
                     await self.db.commit()

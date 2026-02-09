@@ -3,6 +3,7 @@
 import io
 import json
 import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,11 @@ from api.models.database import Finding, MobileApp, Scan
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a string for safe use in Content-Disposition filenames."""
+    return re.sub(r"[^a-zA-Z0-9._-]", "_", name)
 
 
 @router.get("/findings/{app_id}")
@@ -103,13 +109,13 @@ def _export_json(app: MobileApp | None, findings: list[Finding]) -> StreamingRes
         ],
     }
 
-    filename = f"{app.package_name}_findings.json" if app else "all_findings.json"
+    filename = f"{_sanitize_filename(app.package_name)}_findings.json" if app else "all_findings.json"
     content = json.dumps(data, indent=2)
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="application/json",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
 
@@ -164,13 +170,13 @@ def _export_csv(app: MobileApp | None, findings: list[Finding]) -> StreamingResp
             row.insert(1, f.app_id)
         writer.writerow(row)
 
-    filename = f"{app.package_name}_findings.csv" if app else "all_findings.csv"
+    filename = f"{_sanitize_filename(app.package_name)}_findings.csv" if app else "all_findings.csv"
     content = output.getvalue()
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
 
@@ -329,13 +335,13 @@ def _export_sarif(app: MobileApp | None, findings: list[Finding]) -> StreamingRe
             }
         ]
 
-    filename = f"{app.package_name}_findings.sarif" if app else "all_findings.sarif"
+    filename = f"{_sanitize_filename(app.package_name)}_findings.sarif" if app else "all_findings.sarif"
     content = json.dumps(sarif, indent=2)
     return StreamingResponse(
         io.BytesIO(content.encode()),
         media_type="application/json",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
 
@@ -455,12 +461,12 @@ pre {{ background: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto;
 </body>
 </html>"""
 
-    filename = f"{app.package_name}_findings.html" if app else "all_findings.html"
+    filename = f"{_sanitize_filename(app.package_name)}_findings.html" if app else "all_findings.html"
     return StreamingResponse(
         io.BytesIO(html_content.encode()),
         media_type="text/html",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
 
@@ -583,12 +589,12 @@ def _export_findings_pdf(app: MobileApp | None, findings: list[Finding]) -> Stre
         pdf.ln(4)
 
     pdf_bytes = pdf.output()
-    filename = f"{app.package_name}_findings.pdf" if app else "all_findings.pdf"
+    filename = f"{_sanitize_filename(app.package_name)}_findings.pdf" if app else "all_findings.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
 
@@ -693,7 +699,7 @@ async def export_full_report(
             io.BytesIO(content.encode()),
             media_type="application/json",
             headers={
-                "Content-Disposition": f"attachment; filename={app.package_name}_report.json"
+                "Content-Disposition": f'attachment; filename="{_sanitize_filename(app.package_name)}_report.json"'
             },
         )
     elif format == "html":
@@ -702,7 +708,7 @@ async def export_full_report(
             io.BytesIO(html_content.encode()),
             media_type="text/html",
             headers={
-                "Content-Disposition": f"attachment; filename={app.package_name}_report.html"
+                "Content-Disposition": f'attachment; filename="{_sanitize_filename(app.package_name)}_report.html"'
             },
         )
     elif format == "pdf":
@@ -711,7 +717,7 @@ async def export_full_report(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename={app.package_name}_report.pdf"
+                "Content-Disposition": f'attachment; filename="{_sanitize_filename(app.package_name)}_report.pdf"'
             },
         )
 

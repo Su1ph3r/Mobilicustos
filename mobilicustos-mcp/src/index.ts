@@ -331,7 +331,7 @@ const tools = [
         device_id: { type: "string", description: "Device ID" },
         detection_type: {
           type: "string",
-          enum: ["root_detection", "ssl_pinning", "frida_detection", "emulator_detection"],
+          enum: ["root", "ssl_pinning", "frida", "jailbreak", "emulator", "debugger", "tamper", "biometric", "play_integrity"],
           description: "Type of protection to bypass",
         },
       },

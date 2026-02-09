@@ -24,6 +24,7 @@ OWASP references:
 
 import asyncio
 import logging
+import queue
 import subprocess
 from typing import Any
 
@@ -711,32 +712,48 @@ class NetworkAnalyzer(BaseAnalyzer):
             else:
                 script_content = NETWORK_HOOKS_SCRIPT
 
-            messages: list[dict] = []
-            endpoints: list[dict] = []
+            # Thread-safe queues for cross-thread Frida callbacks
+            msg_queue: queue.Queue[dict] = queue.Queue()
+            ep_queue: queue.Queue[dict] = queue.Queue()
 
             def on_message(message: dict, data: Any):
                 if message.get("type") == "send":
                     payload = message["payload"]
                     if isinstance(payload, dict):
                         if payload.get("type") == "endpoint":
-                            endpoints.append(payload)
+                            ep_queue.put(payload)
                         else:
-                            messages.append(payload)
+                            msg_queue.put(payload)
 
             script = session.create_script(script_content)
             script.on("message", on_message)
             await asyncio.to_thread(script.load)
             await asyncio.to_thread(device.resume, pid)
 
-            logger.info("Waiting for network hooks to collect data (30s)...")
-            await asyncio.sleep(30)
-
             try:
-                await asyncio.to_thread(script.unload)
-                await asyncio.to_thread(session.detach)
-                await asyncio.to_thread(device.kill, pid)
-            except Exception:
-                pass
+                logger.info("Waiting for network hooks to collect data (30s)...")
+                await asyncio.sleep(30)
+            finally:
+                try:
+                    await asyncio.to_thread(script.unload)
+                    await asyncio.to_thread(session.detach)
+                    await asyncio.to_thread(device.kill, pid)
+                except Exception:
+                    pass
+
+            # Drain queues
+            messages: list[dict] = []
+            while not msg_queue.empty():
+                try:
+                    messages.append(msg_queue.get_nowait())
+                except queue.Empty:
+                    break
+            endpoints: list[dict] = []
+            while not ep_queue.empty():
+                try:
+                    endpoints.append(ep_queue.get_nowait())
+                except queue.Empty:
+                    break
 
             findings = self._process_messages(messages, app)
 

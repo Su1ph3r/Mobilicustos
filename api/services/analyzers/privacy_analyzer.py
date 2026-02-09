@@ -606,7 +606,7 @@ class PrivacyAnalyzer(BaseAnalyzer):
                         if re.search(pattern, content):
                             found_privacy_url = True
                             break
-                except:
+                except (OSError, UnicodeDecodeError):
                     pass
                 if found_privacy_url:
                     break

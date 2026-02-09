@@ -29,6 +29,7 @@ OWASP references:
 
 import asyncio
 import logging
+import queue
 import subprocess
 from typing import Any
 
@@ -851,12 +852,12 @@ class RuntimeAnalyzer(BaseAnalyzer):
             else:
                 script_content = RUNTIME_HOOKS_SCRIPT
 
-            # Inject hooks
-            messages: list[dict] = []
+            # Inject hooks — use thread-safe queue for cross-thread callbacks
+            msg_queue: queue.Queue[dict] = queue.Queue()
 
             def on_message(message: dict, data: Any):
                 if message.get("type") == "send":
-                    messages.append(message["payload"])
+                    msg_queue.put(message["payload"])
                 elif message.get("type") == "error":
                     logger.warning(f"Frida script error: {message.get('description', '')}")
 
@@ -868,16 +869,25 @@ class RuntimeAnalyzer(BaseAnalyzer):
             await asyncio.to_thread(device.resume, pid)
 
             # Wait for hooks to collect data
-            logger.info("Waiting for runtime hooks to collect data (30s)...")
-            await asyncio.sleep(30)
-
-            # Cleanup
             try:
-                await asyncio.to_thread(script.unload)
-                await asyncio.to_thread(session.detach)
-                await asyncio.to_thread(device.kill, pid)
-            except Exception:
-                pass
+                logger.info("Waiting for runtime hooks to collect data (30s)...")
+                await asyncio.sleep(30)
+            finally:
+                # Cleanup — always attempt even if sleep is cancelled
+                try:
+                    await asyncio.to_thread(script.unload)
+                    await asyncio.to_thread(session.detach)
+                    await asyncio.to_thread(device.kill, pid)
+                except Exception:
+                    pass
+
+            # Drain queue into list for processing
+            messages: list[dict] = []
+            while not msg_queue.empty():
+                try:
+                    messages.append(msg_queue.get_nowait())
+                except queue.Empty:
+                    break
 
             # Convert Frida messages to Finding objects
             findings = self._process_messages(messages, app)
