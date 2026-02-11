@@ -21,16 +21,17 @@ Typical usage:
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.config import get_settings
-from api.models.database import Finding, MobileApp, Scan, Secret
+from api.models.database import AttackPath, Finding, MobileApp, Scan, Secret
 from api.services.docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,15 @@ class ScanOrchestrator:
 
             logger.info(f"Starting scan with {total_analyzers} analyzers")
 
+            await self._trigger_webhook(
+                "scan.started",
+                {
+                    "scan_id": str(scan.scan_id),
+                    "app_id": app.app_id,
+                    "analyzer_count": total_analyzers,
+                },
+            )
+
             # Run each analyzer
             for i, analyzer_name in enumerate(analyzers):
                 if scan.status == "cancelled":
@@ -237,13 +247,10 @@ class ScanOrchestrator:
                     logger.info(f"Running analyzer: {analyzer_name}")
                     findings = await self._run_analyzer(analyzer_name, app)
 
-                    # Save findings — set scan_id and make finding_id unique per scan
-                    for finding in findings:
-                        finding.scan_id = scan.scan_id
-                        # Append scan_id to finding_id to prevent collisions across scans
-                        finding.finding_id = f"{finding.finding_id}-{str(scan.scan_id)[:8]}"
-                        self.db.add(finding)
-                        self.findings.append(finding)
+                    # Deduplicate and persist findings
+                    persisted = await self._deduplicate_and_persist_findings(
+                        findings, scan, app
+                    )
 
                     # Flush findings to database before creating secrets (foreign key constraint)
                     await self.db.flush()
@@ -254,9 +261,22 @@ class ScanOrchestrator:
 
                     # Create Secret entries for secret_scanner findings
                     if analyzer_name == "secret_scanner":
-                        for finding in findings:
+                        for finding in persisted:
                             if finding.category == "Secrets":
                                 self._create_secret_from_finding(finding, scan)
+
+                    # Trigger webhook for new findings
+                    if persisted:
+                        await self._trigger_webhook(
+                            "finding.new",
+                            {
+                                "scan_id": str(scan.scan_id),
+                                "app_id": app.app_id,
+                                "analyzer": analyzer_name,
+                                "count": len(persisted),
+                                "titles": [f.title for f in persisted[:10]],
+                            },
+                        )
 
                 except Exception as e:
                     logger.error(f"Analyzer {analyzer_name} failed: {e}")
@@ -275,6 +295,9 @@ class ScanOrchestrator:
             scan.completed_at = datetime.utcnow()
             scan.findings_count = self._count_findings()
 
+            # Generate attack paths from accumulated findings
+            await self._generate_attack_paths(scan, app)
+
             # Update app status
             app.status = "completed"
             app.last_analyzed = datetime.utcnow()
@@ -282,12 +305,29 @@ class ScanOrchestrator:
             await self.db.commit()
             logger.info(f"Scan completed: {len(self.findings)} findings")
 
+            await self._trigger_webhook(
+                "scan.completed",
+                {
+                    "scan_id": str(scan.scan_id),
+                    "app_id": app.app_id,
+                    "findings_count": scan.findings_count,
+                },
+            )
+
         except Exception as e:
             await self.db.rollback()
             scan.status = "failed"
             scan.error_message = str(e)[:500]
             scan.completed_at = datetime.utcnow()
             await self.db.commit()
+            await self._trigger_webhook(
+                "scan.failed",
+                {
+                    "scan_id": str(scan.scan_id),
+                    "app_id": app.app_id,
+                    "error": f"Scan failed: {type(e).__name__}",
+                },
+            )
             raise
 
     def _get_analyzers(self, scan: Scan, app: MobileApp) -> list[str]:
@@ -543,3 +583,205 @@ class ScanOrchestrator:
             exposure_risk=finding.severity,
         )
         self.db.add(secret)
+
+    # ------------------------------------------------------------------
+    # Deduplication
+    # ------------------------------------------------------------------
+
+    async def _deduplicate_and_persist_findings(
+        self,
+        findings: list[Finding],
+        scan: Scan,
+        app: MobileApp,
+    ) -> list[Finding]:
+        """Deduplicate findings within a scan and against existing DB rows.
+
+        Returns the list of findings that were actually persisted or updated
+        (used by callers such as the secret_scanner loop).
+        """
+        if not findings:
+            return []
+
+        # --- Within-scan dedup: group by canonical_id ---
+        groups: dict[str | None, list[Finding]] = defaultdict(list)
+        for f in findings:
+            groups[f.canonical_id].append(f)
+
+        merged: list[Finding] = []
+        for cid, group in groups.items():
+            if cid is None or len(group) == 1:
+                merged.extend(group)
+            else:
+                merged.append(self._merge_finding_group(group))
+
+        # --- Cross-scan dedup: upsert against existing findings ---
+        persisted: list[Finding] = []
+        for finding in merged:
+            finding.scan_id = scan.scan_id
+
+            if finding.canonical_id:
+                existing = await self._find_existing(finding.canonical_id, app.app_id)
+                if existing:
+                    self._update_existing_finding(existing, finding, scan)
+                    persisted.append(existing)
+                    continue
+
+            # New finding – assign unique finding_id
+            finding.finding_id = f"{finding.finding_id}-{str(scan.scan_id)[:8]}"
+            self.db.add(finding)
+            persisted.append(finding)
+
+        # Update self.findings: remove stale refs, add persisted
+        persisted_ids = {id(f) for f in persisted}
+        self.findings = [
+            f for f in self.findings if id(f) not in persisted_ids
+        ] + persisted
+
+        return persisted
+
+    @staticmethod
+    def _merge_finding_group(group: list[Finding]) -> Finding:
+        """Merge multiple findings with the same canonical_id into one.
+
+        Keeps highest severity, longest description, union of tool_sources,
+        and combines unique poc_commands.
+        """
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        group.sort(key=lambda f: severity_rank.get(f.severity, 5))
+        winner = group[0]  # highest severity
+
+        all_tools: list[str] = []
+        all_poc_commands: list[dict] = []
+        seen_commands: set[str] = set()
+
+        for f in group:
+            # Accumulate tool_sources
+            for t in (f.tool_sources or []):
+                if t not in all_tools:
+                    all_tools.append(t)
+
+            # Combine poc_commands (dedup by command string)
+            for cmd in (f.poc_commands or []):
+                key = str(cmd.get("command", ""))
+                if key and key not in seen_commands:
+                    seen_commands.add(key)
+                    all_poc_commands.append(cmd)
+
+            # Keep longest description
+            if f.description and (
+                not winner.description or len(f.description) > len(winner.description)
+            ):
+                winner.description = f.description
+
+            # Keep richest poc_evidence
+            if f.poc_evidence and (
+                not winner.poc_evidence or len(f.poc_evidence) > len(winner.poc_evidence)
+            ):
+                winner.poc_evidence = f.poc_evidence
+
+        winner.tool_sources = all_tools
+        winner.poc_commands = all_poc_commands
+        return winner
+
+    async def _find_existing(self, canonical_id: str, app_id: str) -> Finding | None:
+        """Look up an existing finding by canonical_id + app_id."""
+        result = await self.db.execute(
+            select(Finding)
+            .where(Finding.canonical_id == canonical_id, Finding.app_id == app_id)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    def _update_existing_finding(
+        existing: Finding,
+        incoming: Finding,
+        scan: Scan,
+    ) -> None:
+        """Merge incoming finding data into an existing DB row."""
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+        # Merge tool_sources
+        merged_tools = list(existing.tool_sources or [])
+        for t in (incoming.tool_sources or []):
+            if t not in merged_tools:
+                merged_tools.append(t)
+        existing.tool_sources = merged_tools
+
+        # Update timestamps
+        existing.last_seen = datetime.utcnow()
+        existing.scan_id = scan.scan_id
+
+        # Upgrade severity if incoming is higher
+        if severity_rank.get(incoming.severity, 5) < severity_rank.get(existing.severity, 5):
+            existing.severity = incoming.severity
+
+        # Keep richer metadata
+        if incoming.description and (
+            not existing.description or len(incoming.description) > len(existing.description)
+        ):
+            existing.description = incoming.description
+
+        if incoming.poc_evidence and (
+            not existing.poc_evidence or len(incoming.poc_evidence) > len(existing.poc_evidence)
+        ):
+            existing.poc_evidence = incoming.poc_evidence
+
+        # Merge poc_commands
+        existing_cmds = existing.poc_commands or []
+        seen = {str(c.get("command", "")) for c in existing_cmds}
+        for cmd in (incoming.poc_commands or []):
+            key = str(cmd.get("command", ""))
+            if key and key not in seen:
+                seen.add(key)
+                existing_cmds.append(cmd)
+        existing.poc_commands = existing_cmds
+
+    # ------------------------------------------------------------------
+    # Attack Path Generation
+    # ------------------------------------------------------------------
+
+    async def _generate_attack_paths(self, scan: Scan, app: MobileApp) -> None:
+        """Generate attack paths from accumulated findings. Non-fatal."""
+        try:
+            from api.services.attack_path_analyzer import AttackPathAnalyzer
+
+            # Delete existing attack paths for this app (regenerate each scan)
+            await self.db.execute(
+                text("DELETE FROM attack_paths WHERE app_id = :app_id"),
+                {"app_id": app.app_id},
+            )
+
+            analyzer = AttackPathAnalyzer()
+            paths = await analyzer.generate_paths(self.findings)
+
+            for p in paths:
+                attack_path = AttackPath(
+                    app_id=app.app_id,
+                    scan_id=scan.scan_id,
+                    path_name=p["name"],
+                    path_description=p.get("description"),
+                    attack_vector=p.get("attack_vector"),
+                    finding_chain=p.get("finding_chain", []),
+                    combined_risk_score=p.get("risk_score"),
+                    exploitability=p.get("exploitability"),
+                )
+                self.db.add(attack_path)
+
+            logger.info(f"Generated {len(paths)} attack paths for app {app.app_id}")
+        except Exception as e:
+            logger.debug(f"Attack path generation failed (non-fatal): {e}")
+
+    # ------------------------------------------------------------------
+    # Webhook Notifications
+    # ------------------------------------------------------------------
+
+    async def _trigger_webhook(self, event_type: str, payload: dict) -> None:
+        """Fire a webhook event. Failures are non-fatal and logged at debug level."""
+        try:
+            from api.services.webhook_service import WebhookService
+
+            service = WebhookService(self.db)
+            await service.trigger_event(event_type, payload)
+        except Exception as e:
+            logger.debug(f"Webhook trigger failed (non-fatal): {e}")

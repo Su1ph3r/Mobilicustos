@@ -165,6 +165,9 @@ CREATE INDEX idx_findings_app_status ON findings(app_id, status);
 CREATE INDEX idx_findings_scan_severity ON findings(scan_id, severity);
 CREATE INDEX idx_findings_created_at ON findings(created_at DESC);
 
+-- Dedup lookup index (canonical_id + app_id)
+CREATE INDEX IF NOT EXISTS idx_findings_canonical_app ON findings(canonical_id, app_id);
+
 -- Attack Paths (Neo4j sync reference)
 CREATE TABLE attack_paths (
     path_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1237,19 +1240,25 @@ CREATE TABLE webhooks (
     team_id UUID REFERENCES teams(team_id) ON DELETE CASCADE,
 
     -- Webhook Config
-    webhook_name VARCHAR(256) NOT NULL,
+    name VARCHAR(256) NOT NULL,
     url VARCHAR(2048) NOT NULL,
     secret VARCHAR(256),
 
     -- Events
-    events JSONB DEFAULT '["scan.completed", "finding.created"]',
+    events JSONB DEFAULT '["scan.completed", "finding.new"]',
 
     -- Status
-    is_enabled BOOLEAN DEFAULT TRUE,
+    is_active BOOLEAN DEFAULT TRUE,
     last_triggered_at TIMESTAMP,
     failure_count INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
 
-    created_at TIMESTAMP DEFAULT NOW()
+    -- Additional fields
+    headers JSONB,
+    created_by VARCHAR(128),
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP
 );
 
 CREATE INDEX idx_webhooks_team ON webhooks(team_id);

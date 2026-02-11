@@ -175,6 +175,31 @@ class BaseAnalyzer(ABC):
 
         return canonical
 
+    @staticmethod
+    def _infer_resource_type(file_path: str | None) -> str:
+        """Infer resource_type from the file path extension/name."""
+        if not file_path:
+            return "file"
+
+        fp = file_path.lower()
+
+        if fp.endswith(("androidmanifest.xml", "info.plist", ".entitlements")):
+            return "manifest"
+        if fp.endswith((".so", ".dylib", ".a")):
+            return "native_library"
+        if fp.endswith((".dex", ".class", ".smali")):
+            return "bytecode"
+        if fp.endswith((".xml", ".json", ".yaml", ".yml", ".properties", ".cfg", ".ini")):
+            return "config_file"
+        if fp.endswith((".java", ".kt", ".swift", ".m", ".dart", ".js", ".ts")):
+            return "source_code"
+        if fp.endswith((".tflite", ".mlmodel", ".onnx", ".pt", ".pb")):
+            return "ml_model"
+        if fp.endswith((".pem", ".cer", ".crt", ".der", ".p12", ".bks", ".jks", ".keystore")):
+            return "certificate"
+
+        return "file"
+
     def create_finding(
         self,
         app: MobileApp,
@@ -263,7 +288,7 @@ class BaseAnalyzer(ABC):
             description=description,
             impact=impact,
             remediation=remediation,
-            resource_type=category,
+            resource_type=self._infer_resource_type(file_path),
             file_path=file_path,
             line_number=line_number,
             code_snippet=code_snippet,
