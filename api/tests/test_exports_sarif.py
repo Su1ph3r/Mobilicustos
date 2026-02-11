@@ -131,7 +131,7 @@ class TestExportSarif:
         sarif = _get_sarif(response)
         driver = sarif["runs"][0]["tool"]["driver"]
         assert driver["name"] == "Mobilicustos"
-        assert driver["version"] == "0.1.1"
+        assert driver["version"] == "0.1.3"
 
     def test_rules_have_full_description(self):
         app = _make_app()

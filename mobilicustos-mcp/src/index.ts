@@ -442,7 +442,7 @@ const prompts = [
 const server = new Server(
   {
     name: "mobilicustos-mcp",
-    version: "0.1.1",
+    version: "0.1.3",
   },
   {
     capabilities: {

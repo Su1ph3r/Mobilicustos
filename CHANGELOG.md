@@ -5,6 +5,31 @@ All notable changes to Mobilicustos will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-02-11
+
+### Changed
+
+#### Export Overhaul
+- **Severity Ordering** — All export formats now rank findings by severity (critical → high → medium → low → info) using PostgreSQL `array_position` ordering
+- **Full Field Parity** — JSON and CSV exports now include all 30+ finding fields (PoC evidence, remediation commands, code examples, Frida scripts, OWASP links, CVSS vectors, tool sources, timestamps)
+- **HTML Accordion Layout** — HTML exports redesigned with interactive accordion sections grouped by severity; click to expand/collapse individual findings matching the UI detail view
+- **PDF Full Rendering** — PDF exports now render complete finding details without truncation, replacing the previous stub implementation
+- **Centralized Serializer** — New `_serialize_finding()` function ensures consistent field mapping across all export formats
+- **Shared HTML Builders** — Reusable helpers for command badges, resource links, code tabs, and accordion items
+
+### Fixed
+- **PDF Unicode Crash** — Added `_pdf_safe_text()` to handle non-Latin-1 characters (e.g., Chinese) that caused `FPDFUnicodeEncodingException` with fpdf2's Helvetica font
+- **Falsy-Zero Score Bug** — `risk_score` and `cvss_score` of 0.0 were incorrectly dropped; fixed with `is not None` checks
+- **Stored XSS via Resource URLs** — `_build_resources_html()` now validates URL protocol (http/https only) to prevent `javascript:` injection
+- **PDF App Name Crash** — Non-Latin-1 app names in PDF headers now sanitized via `_pdf_safe_text()`
+- **CSV Column Expansion** — Expanded from 14 to 32 columns with no truncation; JSONB fields serialized as JSON strings
+- **Compliance Report PDF** — `report_service.py` updated with real fpdf2 rendering and app name sanitization
+
+### Security
+- URL protocol validation prevents stored XSS through malicious resource URLs in HTML exports
+
+---
+
 ## [0.1.2] - 2026-02-06
 
 ### Added

@@ -465,7 +465,7 @@ async def export_har(scan_id: UUID, db: AsyncSession = Depends(get_db)):
     har = {
         "log": {
             "version": "1.2",
-            "creator": {"name": "mobilicustos", "version": "0.1.1"},
+            "creator": {"name": "mobilicustos", "version": "0.1.3"},
             "entries": entries,
         }
     }

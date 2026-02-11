@@ -857,7 +857,7 @@ Detailed Frida server configuration including connection status, server version,
 
 ### About
 
-Displays the platform version (currently 0.1.1) and a link to the GitHub repository.
+Displays the platform version (currently 0.1.3) and a link to the GitHub repository.
 
 ---
 

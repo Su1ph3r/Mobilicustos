@@ -111,10 +111,35 @@ class ReportService:
                     "category": f["category"],
                     "status": f["status"],
                     "description": f["description"],
+                    "impact": f.get("impact"),
+                    "remediation": f.get("remediation"),
+                    "tool": f.get("tool"),
+                    "tool_sources": f.get("tool_sources", []),
+                    "platform": f.get("platform"),
+                    "resource_type": f.get("resource_type"),
                     "file_path": f.get("file_path"),
                     "line_number": f.get("line_number"),
-                    "cwe_id": f.get("cwe_id"),
+                    "code_snippet": f.get("code_snippet"),
+                    "poc_evidence": f.get("poc_evidence"),
+                    "poc_verification": f.get("poc_verification"),
+                    "poc_commands": f.get("poc_commands", []),
+                    "poc_frida_script": f.get("poc_frida_script"),
+                    "poc_screenshot_path": f.get("poc_screenshot_path"),
+                    "remediation_commands": f.get("remediation_commands", []),
+                    "remediation_code": f.get("remediation_code", {}),
+                    "remediation_resources": f.get("remediation_resources", []),
+                    "risk_score": f.get("risk_score"),
                     "cvss_score": f.get("cvss_score"),
+                    "cvss_vector": f.get("cvss_vector"),
+                    "cwe_id": f.get("cwe_id"),
+                    "cwe_name": f.get("cwe_name"),
+                    "owasp_masvs_category": f.get("owasp_masvs_category"),
+                    "owasp_masvs_control": f.get("owasp_masvs_control"),
+                    "owasp_mastg_test": f.get("owasp_mastg_test"),
+                    "canonical_id": f.get("canonical_id"),
+                    "first_seen": str(f["first_seen"]) if f.get("first_seen") else None,
+                    "last_seen": str(f["last_seen"]) if f.get("last_seen") else None,
+                    "created_at": str(f["created_at"]) if f.get("created_at") else None,
                 }
                 for f in findings
             ]
@@ -449,78 +474,235 @@ class ReportService:
         self,
         report: dict,
     ) -> bytes:
-        """Export report as PDF (placeholder - would use reportlab or similar)."""
-        # In production, use reportlab, weasyprint, or similar
-        # For now, return JSON as bytes
-        return json.dumps(report, indent=2, default=str).encode()
+        """Export report as PDF using fpdf2."""
+        from api.routers.exports import (
+            SEVERITY_COLORS_RGB,
+            SEVERITY_LEVELS,
+            _render_finding_to_pdf,
+            _severity_sort_key,
+        )
+        from fpdf import FPDF
+
+        class CompliancePDF(FPDF):
+            def header(self):
+                self.set_font("Helvetica", "B", 10)
+                self.set_text_color(100, 100, 100)
+                self.cell(0, 8, "Mobilicustos Compliance Report", align="R")
+                self.ln(12)
+
+            def footer(self):
+                self.set_y(-15)
+                self.set_font("Helvetica", "I", 8)
+                self.set_text_color(150, 150, 150)
+                self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
+
+        pdf = CompliancePDF()
+        pdf.alias_nb_pages()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+
+        # Title
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.set_text_color(17, 24, 39)
+        app_name = report.get("app", {}).get("app_name", "Unknown")
+        from api.routers.exports import _pdf_safe_text
+        pdf.cell(0, 12, f"Compliance Report - {_pdf_safe_text(app_name)}", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(107, 114, 128)
+        pdf.cell(0, 8, f"Generated: {report.get('generated_at', '')}", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(6)
+
+        # Summary
+        summary = report.get("summary", {})
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(55, 65, 81)
+        pdf.cell(0, 10, "Summary", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_draw_color(59, 130, 246)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
+
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(31, 41, 55)
+        score = report.get("compliance", {}).get("overall_score", 0)
+        pdf.cell(0, 7, f"Compliance Score: {score}%", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 7, f"Total Findings: {summary.get('total_findings', 0)}", new_x="LMARGIN", new_y="NEXT")
+        for sev_name in SEVERITY_LEVELS:
+            r, g, b = SEVERITY_COLORS_RGB[sev_name]
+            pdf.set_text_color(r, g, b)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(30, 7, f"  {sev_name.upper()}:")
+            pdf.set_font("Helvetica", "", 10)
+            pdf.cell(0, 7, str(summary.get(sev_name, 0)), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(31, 41, 55)
+        pdf.ln(6)
+
+        # Compliance Categories
+        categories = report.get("compliance", {}).get("categories", {})
+        if categories:
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_text_color(55, 65, 81)
+            pdf.cell(0, 10, "Compliance Categories", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_draw_color(59, 130, 246)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(4)
+
+            for cat_id, cat_data in categories.items():
+                status = cat_data.get("status", "N/A").upper()
+                if status == "PASS":
+                    pdf.set_text_color(34, 197, 94)
+                elif status == "FAIL":
+                    pdf.set_text_color(220, 38, 38)
+                else:
+                    pdf.set_text_color(202, 138, 4)
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(50, 7, f"{cat_id}")
+                pdf.set_font("Helvetica", "", 10)
+                pdf.cell(60, 7, cat_data.get("name", ""))
+                pdf.cell(20, 7, status)
+                pdf.set_text_color(107, 114, 128)
+                pdf.cell(0, 7, f"{cat_data.get('findings_count', 0)} findings", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(6)
+
+        # Findings
+        findings = report.get("findings", [])
+        if findings:
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_text_color(55, 65, 81)
+            pdf.cell(0, 10, "Findings", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_draw_color(59, 130, 246)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(4)
+
+            sorted_findings = sorted(findings, key=_severity_sort_key)
+            for i, f in enumerate(sorted_findings, 1):
+                _render_finding_to_pdf(pdf, f, i)
+
+        return pdf.output()
 
     async def export_report_html(
         self,
         report: dict,
     ) -> str:
-        """Export report as HTML."""
-        # Simple HTML template
-        html = f"""
-<!DOCTYPE html>
-<html>
+        """Export report as HTML with accordion findings."""
+        from html import escape
+
+        from api.routers.exports import (
+            SEVERITY_BG_COLORS,
+            SEVERITY_COLORS,
+            SEVERITY_LEVELS,
+            _accordion_js_css,
+            _build_finding_accordion_html,
+            _severity_sort_key,
+        )
+
+        app_name = escape(report.get("app", {}).get("app_name", "Unknown"))
+        summary = report.get("summary", {})
+        compliance = report.get("compliance", {})
+
+        # Summary cards
+        summary_cards = ""
+        for sev_name in SEVERITY_LEVELS:
+            color = SEVERITY_COLORS[sev_name]
+            bg = SEVERITY_BG_COLORS[sev_name]
+            summary_cards += (
+                f'<div class="summary-card" style="background:{bg};">'
+                f'<div class="count" style="color:{color};">'
+                f'{summary.get(sev_name, 0)}</div>'
+                f'<div class="label" style="color:{color};">'
+                f'{sev_name.title()}</div></div>'
+            )
+
+        # Compliance categories table
+        categories_html = ""
+        for cat_id, cat_data in compliance.get("categories", {}).items():
+            status = cat_data.get("status", "N/A")
+            if status == "pass":
+                status_color = "#22c55e"
+            elif status == "fail":
+                status_color = "#dc2626"
+            else:
+                status_color = "#ca8a04"
+            categories_html += (
+                f'<tr><td>{escape(cat_id)} - {escape(cat_data.get("name", ""))}</td>'
+                f'<td style="color:{status_color};font-weight:600;">'
+                f'{escape(status.upper())}</td>'
+                f'<td>{cat_data.get("findings_count", 0)}</td></tr>'
+            )
+
+        # Findings accordions
+        findings_html = ""
+        findings = report.get("findings", [])
+        if findings:
+            sorted_findings = sorted(findings, key=_severity_sort_key)
+            idx = 1
+            for sev_name in SEVERITY_LEVELS:
+                sev_findings = [
+                    f for f in sorted_findings if f.get("severity") == sev_name
+                ]
+                if not sev_findings:
+                    continue
+                color = SEVERITY_COLORS[sev_name]
+                findings_html += (
+                    f'<h3 style="color:{color};margin-top:24px;margin-bottom:8px;'
+                    f'border-bottom:2px solid {color};padding-bottom:4px;">'
+                    f'{escape(sev_name.upper())} ({len(sev_findings)})</h3>'
+                )
+                for f in sev_findings:
+                    findings_html += _build_finding_accordion_html(f, idx)
+                    idx += 1
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>Security Report - {report.get('app', {}).get('app_name', 'Unknown')}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 40px; }}
-        h1 {{ color: #333; }}
-        .summary {{ background: #f5f5f5; padding: 20px; border-radius: 8px; }}
-        .severity-critical {{ color: #dc3545; }}
-        .severity-high {{ color: #fd7e14; }}
-        .severity-medium {{ color: #ffc107; }}
-        .severity-low {{ color: #28a745; }}
-        table {{ border-collapse: collapse; width: 100%; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
-    </style>
+<meta charset="UTF-8">
+<title>Compliance Report - {app_name}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
+h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }}
+h2 {{ color: #374151; margin-top: 32px; }}
+table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
+th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }}
+th {{ background: #f9fafb; font-weight: 600; }}
+.summary-grid {{ display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }}
+.summary-card {{ flex: 1; min-width: 100px; padding: 16px; border-radius: 8px; text-align: center; }}
+.summary-card .count {{ font-size: 28px; font-weight: 700; }}
+.summary-card .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }}
+</style>
+{_accordion_js_css()}
 </head>
 <body>
-    <h1>Security Compliance Report</h1>
-    <p>Generated: {report.get('generated_at', 'N/A')}</p>
+<h1>Security Compliance Report</h1>
+<p style="color:#6b7280;">Generated: {escape(report.get('generated_at', 'N/A'))}</p>
 
-    <h2>Application</h2>
-    <p><strong>{report.get('app', {}).get('app_name', 'N/A')}</strong></p>
-    <p>Package: {report.get('app', {}).get('package_name', 'N/A')}</p>
-    <p>Platform: {report.get('app', {}).get('platform', 'N/A')}</p>
+<h2>Application</h2>
+<table>
+<tr><td><strong>Name</strong></td><td>{app_name}</td></tr>
+<tr><td><strong>Package</strong></td><td>{escape(report.get('app', {}).get('package_name', 'N/A'))}</td></tr>
+<tr><td><strong>Platform</strong></td><td>{escape(report.get('app', {}).get('platform', 'N/A'))}</td></tr>
+</table>
 
-    <h2>Summary</h2>
-    <div class="summary">
-        <p>Compliance Score: <strong>{report.get('compliance', {}).get('overall_score', 0)}%</strong></p>
-        <p>Total Findings: {report.get('summary', {}).get('total_findings', 0)}</p>
-        <p>
-            <span class="severity-critical">Critical: {report.get('summary', {}).get('critical', 0)}</span> |
-            <span class="severity-high">High: {report.get('summary', {}).get('high', 0)}</span> |
-            <span class="severity-medium">Medium: {report.get('summary', {}).get('medium', 0)}</span> |
-            <span class="severity-low">Low: {report.get('summary', {}).get('low', 0)}</span>
-        </p>
-    </div>
+<h2>Summary</h2>
+<div class="summary-grid">
+{summary_cards}
+</div>
+<p><strong>Compliance Score:</strong> {compliance.get('overall_score', 0)}%</p>
+<p><strong>Total Findings:</strong> {summary.get('total_findings', 0)}</p>
 
-    <h2>Compliance Categories</h2>
-    <table>
-        <tr>
-            <th>Category</th>
-            <th>Status</th>
-            <th>Findings</th>
-        </tr>
-"""
+<h2>Compliance Categories</h2>
+<table>
+<thead><tr><th>Category</th><th>Status</th><th>Findings</th></tr></thead>
+<tbody>{categories_html}</tbody>
+</table>
 
-        for cat_id, cat_data in report.get("compliance", {}).get("categories", {}).items():
-            status_class = "severity-low" if cat_data.get("status") == "pass" else "severity-high"
-            html += f"""
-        <tr>
-            <td>{cat_id} - {cat_data.get('name', '')}</td>
-            <td class="{status_class}">{cat_data.get('status', 'N/A').upper()}</td>
-            <td>{cat_data.get('findings_count', 0)}</td>
-        </tr>
-"""
+<h2>Findings</h2>
+<div class="no-print" style="margin-bottom:12px;">
+<button onclick="expandAll()" style="padding:6px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;margin-right:4px;">Expand All</button>
+<button onclick="collapseAll()" style="padding:6px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;">Collapse All</button>
+</div>
+{findings_html}
 
-        html += """
-    </table>
+<hr style="margin-top:40px;">
+<p style="color:#9ca3af;font-size:12px;text-align:center;">Generated by Mobilicustos Security Assessment Platform</p>
 </body>
-</html>
-"""
+</html>"""
         return html
