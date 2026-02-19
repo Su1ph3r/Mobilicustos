@@ -264,7 +264,8 @@ function closeMobileMenu() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 600;
+  font-family: var(--font-heading, 'Jost', sans-serif);
+  font-weight: 700;
   color: var(--primary-color);
 }
 
@@ -330,7 +331,8 @@ function closeMobileMenu() {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  font-weight: 600;
+  font-family: var(--font-heading, 'Jost', sans-serif);
+  font-weight: 700;
   font-size: 1.1rem;
   color: var(--primary-color);
 }
@@ -340,6 +342,7 @@ function closeMobileMenu() {
 }
 
 .logo-text {
+  font-weight: 800;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -373,6 +376,8 @@ function closeMobileMenu() {
   border: none;
   background: transparent;
   color: var(--text-color);
+  font-family: var(--font-body, 'Jost', sans-serif);
+  font-weight: 500;
   font-size: 0.9rem;
   cursor: pointer;
   border-radius: 8px;
@@ -415,7 +420,7 @@ function closeMobileMenu() {
   background: var(--surface-100);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;
-  font-family: monospace;
+  font-family: var(--font-mono, 'Source Code Pro', monospace);
 }
 
 .nav-item.active .nav-shortcut {

@@ -108,6 +108,16 @@ RESOURCE_TYPE_COLORS = {
     "tool": "#00bcd4",
 }
 
+# Google Fonts link for generated HTML reports
+_GOOGLE_FONTS_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600;700;800'
+    '&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">'
+)
+_FONT_BODY = "'Jost', -apple-system, BlinkMacSystemFont, sans-serif"
+_FONT_MONO = "'Source Code Pro', 'JetBrains Mono', monospace"
+
 
 # ---------------------------------------------------------------------------
 # Phase 0C: Full finding serializer
@@ -188,7 +198,7 @@ def _build_commands_html(commands: list, label: str) -> str:
             f'padding:1px 6px;border-radius:3px;font-size:11px;margin-right:6px;">'
             f'{escape(cmd_type)}</span>'
             f'<pre style="display:inline;background:#1e293b;color:#e2e8f0;'
-            f'padding:4px 8px;border-radius:3px;font-size:12px;font-family:monospace;">'
+            f'padding:4px 8px;border-radius:3px;font-size:12px;font-family:{_FONT_MONO};">'
             f'{escape(cmd_text)}</pre></div>'
         )
     return f'<div style="margin-top:8px;"><strong>{escape(label)}:</strong>{items}</div>'
@@ -238,7 +248,7 @@ def _build_code_tabs_html(remediation_code: dict) -> str:
             f'font-weight:600;">{escape(lang)}</span>'
             f'<pre style="background:#1e293b;color:#e2e8f0;padding:12px;'
             f'border-radius:0 4px 4px 4px;font-size:12px;margin:0;overflow-x:auto;'
-            f'font-family:monospace;">{escape(str(code))}</pre></div>'
+            f'font-family:{_FONT_MONO};">{escape(str(code))}</pre></div>'
         )
     return f'<div style="margin-top:8px;"><strong>Code Examples:</strong>{tabs}</div>' if tabs else ""
 
@@ -413,7 +423,7 @@ def _build_finding_accordion_html(f: dict, index: int) -> str:
             meta_items.append(
                 f'<div class="grid-item">'
                 f'<span class="grid-label">{label}</span>'
-                f'<span class="grid-value" style="font-family:monospace;font-size:12px;'
+                f"<span class=\"grid-value\" style=\"font-family:{_FONT_MONO};font-size:12px;"
                 f'word-break:break-all;">{escape(str(val))}</span></div>'
             )
     if f.get("cvss_score"):
@@ -427,7 +437,7 @@ def _build_finding_accordion_html(f: dict, index: int) -> str:
         meta_items.append(
             f'<div class="grid-item">'
             f'<span class="grid-label">CVSS Vector</span>'
-            f'<span class="grid-value" style="font-family:monospace;font-size:12px;'
+            f"<span class=\"grid-value\" style=\"font-family:{_FONT_MONO};font-size:12px;"
             f'word-break:break-all;">{escape(str(f["cvss_vector"]))}</span></div>'
         )
     if f.get("risk_score"):
@@ -478,7 +488,7 @@ def _accordion_js_css() -> str:
     """JS toggle function + expand/collapse all buttons + print media query."""
     return """<style>
 .section-label {
-    display:block;font-size:11px;text-transform:uppercase;
+    display:block;font-size:11px;font-weight:600;text-transform:uppercase;
     color:#6b7280;letter-spacing:0.03em;margin-bottom:4px;
 }
 .detail-grid {
@@ -498,7 +508,7 @@ def _accordion_js_css() -> str:
 .code-block {
     background:#1e293b;color:#e2e8f0;padding:12px;border-radius:4px;
     font-size:12px;overflow-x:auto;white-space:pre-wrap;
-    word-break:break-word;margin:4px 0 0;font-family:monospace;
+    word-break:break-word;margin:4px 0 0;font-family:'Source Code Pro','JetBrains Mono',monospace;
 }
 @media print {
     .accordion-body { display: block !important; }
@@ -1241,14 +1251,16 @@ def _export_findings_html(app: MobileApp | None, findings: list[Finding]) -> Str
 <head>
 <meta charset="UTF-8">
 <title>{escape(title)}</title>
+{_GOOGLE_FONTS_LINK}
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
-h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }}
-h2 {{ color: #374151; margin-top: 32px; }}
+body {{ font-family: {_FONT_BODY}; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
+h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; font-weight: 700; }}
+h2 {{ color: #374151; margin-top: 32px; font-weight: 700; }}
+h3 {{ font-weight: 700; }}
 .summary-grid {{ display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }}
 .summary-card {{ flex: 1; min-width: 100px; padding: 16px; border-radius: 8px; text-align: center; }}
 .summary-card .count {{ font-size: 28px; font-weight: 700; }}
-.summary-card .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }}
+.summary-card .label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }}
 </style>
 {_accordion_js_css()}
 </head>
@@ -1529,17 +1541,19 @@ def _render_html_report(report: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <title>{escape(report['title'])}</title>
+{_GOOGLE_FONTS_LINK}
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
-h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }}
-h2 {{ color: #374151; margin-top: 32px; }}
+body {{ font-family: {_FONT_BODY}; margin: 0; padding: 20px; color: #1f2937; line-height: 1.6; }}
+h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; font-weight: 700; }}
+h2 {{ color: #374151; margin-top: 32px; font-weight: 700; }}
+h3 {{ font-weight: 700; }}
 table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
 th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }}
 th {{ background: #f9fafb; font-weight: 600; }}
 .summary-grid {{ display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }}
 .summary-card {{ flex: 1; min-width: 100px; padding: 16px; border-radius: 8px; text-align: center; }}
 .summary-card .count {{ font-size: 28px; font-weight: 700; }}
-.summary-card .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }}
+.summary-card .label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }}
 </style>
 {_accordion_js_css()}
 </head>
@@ -1554,7 +1568,7 @@ th {{ background: #f9fafb; font-weight: 600; }}
 <tr><td><strong>Platform</strong></td><td>{escape(app_info.get('platform', ''))}</td></tr>
 <tr><td><strong>Version</strong></td><td>{escape(app_info.get('version', '') or '')}</td></tr>
 <tr><td><strong>Framework</strong></td><td>{escape(app_info.get('framework', '') or '')}</td></tr>
-<tr><td><strong>SHA-256</strong></td><td style="font-family:monospace;font-size:13px;">{escape(app_info.get('file_hash', '') or '')}</td></tr>
+<tr><td><strong>SHA-256</strong></td><td style="font-family:'Source Code Pro',monospace;font-size:13px;">{escape(app_info.get('file_hash', '') or '')}</td></tr>
 </table>
 
 <h2>Executive Summary</h2>
