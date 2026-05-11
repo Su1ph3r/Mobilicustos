@@ -49,6 +49,7 @@ export const appsApi = {
     formData.append('file', file)
     return api.post('/apps', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 600000,
     })
   },
   delete: (id: string) => api.delete(`/apps/${id}`),

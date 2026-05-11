@@ -87,13 +87,13 @@ async def upload_app(
     """Upload a mobile app (APK or IPA)."""
     # Validate file type
     filename = file.filename or ""
-    if not filename.endswith((".apk", ".ipa")):
+    if not filename.endswith((".apk", ".ipa", ".aab")):
         raise HTTPException(
             status_code=400,
-            detail="Invalid file type. Only APK and IPA files are supported.",
+            detail="Invalid file type. Only APK, IPA, and AAB files are supported.",
         )
 
-    platform = "android" if filename.endswith(".apk") else "ios"
+    platform = "android" if filename.endswith((".apk", ".aab")) else "ios"
 
     # Check file size
     max_size = (

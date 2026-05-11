@@ -2376,4 +2376,379 @@ Java.perform(function () {
 });
 """,
     },
+
+    # =========================================================================
+    # 16. bypass/talsec - Talsec freeRASP Bypass (iOS)
+    # =========================================================================
+    {
+        "script_name": "talsec_bypass_ios",
+        "category": "bypass",
+        "subcategory": "talsec",
+        "description": (
+            "Comprehensive Talsec freeRASP bypass for iOS. Neutralises all "
+            "SecurityThreat callbacks by hooking SecurityThreatCenter, blocks "
+            "ptrace(PT_DENY_ATTACH) and sysctl P_TRACED debugger detection, "
+            "prevents exit()/abort() termination on threat detection, suppresses "
+            "Flutter event-channel threat delivery (SwiftFreeraspPlugin), and "
+            "hides Frida artefacts from dylib enumeration and port scanning."
+        ),
+        "platforms": ["ios"],
+        "target_frameworks": ["flutter"],
+        "target_libraries": ["TalsecRuntime", "freeRASP"],
+        "is_builtin": True,
+        "script_content": r"""'use strict';
+
+// =======================================================================
+// Talsec freeRASP — full iOS bypass
+//
+// Layers:
+//   1. ptrace(PT_DENY_ATTACH) → NOP
+//   2. sysctl P_TRACED flag   → cleared on every call
+//   3. exit() / abort()       → blocked (prevents kill-on-threat)
+//   4. SecurityThreatCenter   → threatDetected: suppressed (native Swift)
+//   5. Flutter event channel  → threat events swallowed
+//   6. Dylib / port cloaking  → hide Frida from _dyld + connect()
+//   7. Jailbreak file checks  → hidden from NSFileManager + stat/access
+// =======================================================================
+var TAG = 'talsec_bypass_ios';
+
+// -----------------------------------------------------------------------
+// 1. Bypass ptrace(PT_DENY_ATTACH)
+// -----------------------------------------------------------------------
+(function () {
+    var PT_DENY_ATTACH = 31;
+    var ptracePtr = Module.findExportByName('libsystem_kernel.dylib', 'ptrace');
+    if (!ptracePtr) {
+        ptracePtr = Module.findExportByName(null, 'ptrace');
+    }
+    if (ptracePtr) {
+        Interceptor.replace(ptracePtr, new NativeCallback(function (request, pid, addr, data) {
+            if (request === PT_DENY_ATTACH) {
+                console.log('[+] ' + TAG + ': ptrace(PT_DENY_ATTACH) -> NOP');
+                return 0;
+            }
+            // Forward non-deny requests to the real ptrace
+            return new NativeFunction(ptracePtr, 'int', ['int', 'int', 'pointer', 'int'])(request, pid, addr, data);
+        }, 'int', ['int', 'int', 'pointer', 'int']));
+    } else {
+        console.log('[-] ' + TAG + ': ptrace symbol not found');
+    }
+})();
+
+// -----------------------------------------------------------------------
+// 2. Clear P_TRACED flag from sysctl results
+// -----------------------------------------------------------------------
+(function () {
+    var sysctlPtr = Module.findExportByName('libsystem_c.dylib', 'sysctl');
+    if (sysctlPtr) {
+        Interceptor.attach(sysctlPtr, {
+            onEnter: function (args) {
+                // mib[0]=CTL_KERN(1), mib[1]=KERN_PROC(14), mib[2]=KERN_PROC_PID(1)
+                this.mib = args[0];
+                this.oldp = args[2];
+            },
+            onLeave: function (retval) {
+                try {
+                    if (this.mib.readInt() === 1 && this.mib.add(4).readInt() === 14) {
+                        // kp_proc.p_flag is at offset 32 in kinfo_proc
+                        var flagsAddr = this.oldp.add(32);
+                        var flags = flagsAddr.readInt();
+                        if (flags & 0x800) { // P_TRACED
+                            flagsAddr.writeInt(flags & ~0x800);
+                            console.log('[+] ' + TAG + ': sysctl -> cleared P_TRACED');
+                        }
+                    }
+                } catch (e) {}
+            },
+        });
+    }
+})();
+
+// -----------------------------------------------------------------------
+// 3. Block exit() and abort() — prevents kill-on-threat
+// -----------------------------------------------------------------------
+(function () {
+    ['exit', '_exit', 'abort'].forEach(function (fname) {
+        var fnPtr = Module.findExportByName('libsystem_c.dylib', fname);
+        if (!fnPtr) fnPtr = Module.findExportByName(null, fname);
+        if (fnPtr) {
+            Interceptor.replace(fnPtr, new NativeCallback(function () {
+                console.log('[+] ' + TAG + ': ' + fname + '() blocked');
+                // Do nothing — keep the process alive
+            }, 'void', fname === 'exit' || fname === '_exit' ? ['int'] : []));
+        }
+    });
+})();
+
+// -----------------------------------------------------------------------
+// 4. Suppress SecurityThreatCenter.threatDetected: (native Swift/ObjC)
+// -----------------------------------------------------------------------
+(function () {
+    if (!ObjC.available) return;
+
+    // Talsec publishes threats through SecurityThreatCenter singleton.
+    // The app conforms to SecurityThreatHandler and receives callbacks here.
+    var targets = [
+        'SecurityThreatCenter',
+        'ThreatDispatcher',
+    ];
+
+    targets.forEach(function (cls) {
+        try {
+            var klass = ObjC.classes[cls];
+            if (!klass) return;
+            var methods = klass.$ownMethods;
+            methods.forEach(function (sel) {
+                if (sel.indexOf('threatDetected') !== -1 ||
+                    sel.indexOf('dispatch') !== -1 ||
+                    sel.indexOf('callbackIdentifier') !== -1) {
+                    Interceptor.attach(klass[sel].implementation, {
+                        onEnter: function (args) {
+                            console.log('[+] ' + TAG + ': ' + cls + ' ' + sel + ' -> suppressed');
+                        },
+                        onLeave: function (retval) {
+                            // For methods that return values, return nil/0
+                            retval.replace(NULL);
+                        },
+                    });
+                }
+            });
+            console.log('[+] ' + TAG + ': Hooked ' + cls);
+        } catch (e) {
+            console.log('[-] ' + TAG + ': ' + cls + ' hook failed: ' + e);
+        }
+    });
+
+    // Also hook the Talsec.start(config:) entry point to neuter initialisation
+    try {
+        var TalsecClass = ObjC.classes['Talsec'];
+        if (TalsecClass) {
+            TalsecClass.$ownMethods.forEach(function (sel) {
+                if (sel.indexOf('start') !== -1) {
+                    Interceptor.attach(TalsecClass[sel].implementation, {
+                        onEnter: function (args) {
+                            console.log('[+] ' + TAG + ': Talsec.' + sel + ' -> NOP');
+                        },
+                        onLeave: function (retval) {
+                            retval.replace(NULL);
+                        },
+                    });
+                }
+            });
+        }
+    } catch (e) {}
+})();
+
+// -----------------------------------------------------------------------
+// 5. Flutter freeRASP — suppress event channel threat delivery
+// -----------------------------------------------------------------------
+(function () {
+    if (!ObjC.available) return;
+
+    // SwiftFreeraspPlugin sends threat IDs over a FlutterEventChannel.
+    // We hook the plugin's onListen to replace the event sink with a no-op.
+    var pluginNames = ['SwiftFreeraspPlugin', 'FreeraspPlugin'];
+    pluginNames.forEach(function (name) {
+        try {
+            var plugin = ObjC.classes[name];
+            if (!plugin) return;
+            plugin.$ownMethods.forEach(function (sel) {
+                if (sel.indexOf('onListen') !== -1 || sel.indexOf('handle') !== -1) {
+                    Interceptor.attach(plugin[sel].implementation, {
+                        onEnter: function (args) {
+                            console.log('[+] ' + TAG + ': Flutter ' + name + ' ' + sel + ' -> intercepted');
+                            // For onListenWithArguments:eventSink: — null out the sink
+                            if (sel.indexOf('onListen') !== -1 && args.length > 3) {
+                                args[3] = NULL;
+                            }
+                        },
+                    });
+                }
+            });
+            console.log('[+] ' + TAG + ': Hooked Flutter plugin ' + name);
+        } catch (e) {}
+    });
+
+    // Also suppress method-channel calls that configure Talsec
+    try {
+        var FlutterMethodChannel = ObjC.classes['FlutterMethodChannel'];
+        if (FlutterMethodChannel) {
+            Interceptor.attach(FlutterMethodChannel['- invokeMethod:arguments:'].implementation, {
+                onEnter: function (args) {
+                    var method = ObjC.Object(args[2]).toString();
+                    if (method.indexOf('talsec') !== -1 || method.indexOf('freerasp') !== -1) {
+                        console.log('[+] ' + TAG + ': FlutterMethodChannel("' + method + '") -> suppressed');
+                        args[2] = ObjC.classes['NSString'].stringWithString_('__noop__');
+                    }
+                },
+            });
+        }
+    } catch (e) {}
+})();
+
+// -----------------------------------------------------------------------
+// 6. Hide Frida from dylib enumeration and port scanning
+// -----------------------------------------------------------------------
+(function () {
+    // 6a. _dyld_get_image_name — return empty string for Frida dylibs
+    var dyldGetName = Module.findExportByName(null, '_dyld_get_image_name');
+    if (dyldGetName) {
+        Interceptor.attach(dyldGetName, {
+            onLeave: function (retval) {
+                try {
+                    var name = retval.readUtf8String();
+                    if (name && (name.indexOf('frida') !== -1 ||
+                                 name.indexOf('FridaGadget') !== -1 ||
+                                 name.indexOf('linjector') !== -1)) {
+                        console.log('[+] ' + TAG + ': _dyld_get_image_name("' + name + '") -> hidden');
+                        retval.replace(Memory.allocUtf8String('/usr/lib/libSystem.B.dylib'));
+                    }
+                } catch (e) {}
+            },
+        });
+    }
+
+    // 6b. connect() — block connections to Frida's default port 27042
+    var connectPtr = Module.findExportByName('libsystem_kernel.dylib', 'connect');
+    if (connectPtr) {
+        Interceptor.attach(connectPtr, {
+            onEnter: function (args) {
+                try {
+                    var sockAddr = args[1];
+                    var family = sockAddr.readU16();
+                    if (family === 2) { // AF_INET
+                        var port = (sockAddr.add(2).readU8() << 8) | sockAddr.add(3).readU8();
+                        if (port === 27042) {
+                            console.log('[+] ' + TAG + ': connect(:27042) -> ECONNREFUSED');
+                            this.shouldBlock = true;
+                        }
+                    }
+                } catch (e) {}
+            },
+            onLeave: function (retval) {
+                if (this.shouldBlock) {
+                    retval.replace(-1);
+                }
+            },
+        });
+    }
+})();
+
+// -----------------------------------------------------------------------
+// 7. Hide jailbreak indicators from file-system checks
+// -----------------------------------------------------------------------
+(function () {
+    var jailbreakPaths = [
+        '/Applications/Cydia.app',
+        '/Applications/Sileo.app',
+        '/Applications/Zebra.app',
+        '/Library/MobileSubstrate/MobileSubstrate.dylib',
+        '/Library/MobileSubstrate/DynamicLibraries',
+        '/bin/bash', '/bin/sh',
+        '/usr/sbin/sshd', '/usr/bin/ssh',
+        '/usr/libexec/ssh-keysign',
+        '/etc/apt', '/var/lib/apt', '/var/lib/cydia', '/var/cache/apt',
+        '/var/log/syslog',
+        '/private/var/tmp/cydia.log',
+        '/private/var/stash',
+        '/usr/bin/cycript', '/usr/local/bin/cycript',
+        '/usr/lib/libcycript.dylib',
+        '/System/Library/LaunchDaemons/com.saurik.Cydia.Startup.plist',
+        '/usr/libexec/cydia/firmware.sh',
+    ];
+
+    // 7a. NSFileManager.fileExistsAtPath:
+    if (ObjC.available) {
+        try {
+            var NSFileManager = ObjC.classes.NSFileManager;
+            Interceptor.attach(NSFileManager['- fileExistsAtPath:'].implementation, {
+                onEnter: function (args) {
+                    this.path = ObjC.Object(args[2]).toString();
+                },
+                onLeave: function (retval) {
+                    for (var i = 0; i < jailbreakPaths.length; i++) {
+                        if (this.path === jailbreakPaths[i] ||
+                            this.path.indexOf('MobileSubstrate') !== -1 ||
+                            this.path.indexOf('substrate') !== -1 ||
+                            this.path.indexOf('cycript') !== -1 ||
+                            this.path.indexOf('frida') !== -1) {
+                            retval.replace(0x0);
+                            break;
+                        }
+                    }
+                },
+            });
+        } catch (e) {}
+
+        // 7b. UIApplication.canOpenURL: — hide Cydia/Sileo URL schemes
+        try {
+            var UIApp = ObjC.classes.UIApplication;
+            Interceptor.attach(UIApp['- canOpenURL:'].implementation, {
+                onEnter: function (args) {
+                    this.url = ObjC.Object(args[2]).toString();
+                },
+                onLeave: function (retval) {
+                    var blocked = ['cydia://', 'sileo://', 'zbra://', 'filza://',
+                                   'undecimus://', 'apt-repo://'];
+                    for (var i = 0; i < blocked.length; i++) {
+                        if (this.url.indexOf(blocked[i]) === 0) {
+                            console.log('[+] ' + TAG + ': canOpenURL("' + this.url + '") -> false');
+                            retval.replace(0x0);
+                            break;
+                        }
+                    }
+                },
+            });
+        } catch (e) {}
+    }
+
+    // 7c. C-level stat/access/lstat — return -1 for jailbreak paths
+    ['stat', 'lstat', 'access'].forEach(function (fname) {
+        var fnPtr = Module.findExportByName('libsystem_kernel.dylib', fname);
+        if (!fnPtr) fnPtr = Module.findExportByName(null, fname);
+        if (fnPtr) {
+            Interceptor.attach(fnPtr, {
+                onEnter: function (args) {
+                    try {
+                        var path = args[0].readUtf8String();
+                        if (path) {
+                            for (var i = 0; i < jailbreakPaths.length; i++) {
+                                if (path === jailbreakPaths[i]) {
+                                    this.shouldHide = true;
+                                    break;
+                                }
+                            }
+                            if (!this.shouldHide &&
+                                (path.indexOf('substrate') !== -1 ||
+                                 path.indexOf('cycript') !== -1 ||
+                                 path.indexOf('frida') !== -1 ||
+                                 path.indexOf('Cydia') !== -1)) {
+                                this.shouldHide = true;
+                            }
+                        }
+                    } catch (e) {}
+                },
+                onLeave: function (retval) {
+                    if (this.shouldHide) {
+                        retval.replace(-1);
+                    }
+                },
+            });
+        }
+    });
+
+    // 7d. fork() — return -1 (sandbox not escaped)
+    var forkPtr = Module.findExportByName('libsystem_kernel.dylib', 'fork');
+    if (!forkPtr) forkPtr = Module.findExportByName(null, 'fork');
+    if (forkPtr) {
+        Interceptor.replace(forkPtr, new NativeCallback(function () {
+            console.log('[+] ' + TAG + ': fork() -> -1 (sandboxed)');
+            return -1;
+        }, 'int', []));
+    }
+})();
+
+console.log('[+] ' + TAG + ': Talsec freeRASP bypass active — all 7 layers engaged');
+""",
+    },
 ]

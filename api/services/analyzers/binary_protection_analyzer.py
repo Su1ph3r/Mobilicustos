@@ -101,8 +101,27 @@ RASP_SIGNATURES = {
         "patterns": [
             r"com\.aheaditec\.talsec",
             r"freeRASP",
+            r"TalsecRuntime",
+            r"TalsecConfig",
+            r"SecurityThreatCenter",
+            r"SecurityThreatHandler",
+            r"SecurityThreat",
+            r"ThreatDispatcher",
+            r"SwiftFreeraspPlugin",
+            r"FreeraspFlutterPlugin",
+            r"talsec\.app/freerasp",
+            r"app\.talsec\.externalid",
         ],
-        "features": ["root_detection", "emulator_detection", "tampering_detection"],
+        "features": [
+            "root_detection",
+            "jailbreak_detection",
+            "emulator_detection",
+            "tampering_detection",
+            "debugger_detection",
+            "hook_detection",
+            "device_binding",
+            "unofficial_store_detection",
+        ],
     },
 }
 
@@ -419,8 +438,9 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
             for pattern in sdk_info["patterns"]:
                 rasp_checks.append((re.compile(pattern, re.IGNORECASE), sdk_name, sdk_info))
 
-        # Read each file once and check all RASP patterns
-        for ext in [".java", ".kt", ".smali", ".swift", ".m", ".xml", ".plist"]:
+        # --- 1. Scan source/config files for RASP patterns ---
+        for ext in [".java", ".kt", ".smali", ".swift", ".m", ".h",
+                     ".xml", ".plist", ".pbxproj", ".podspec", ".json"]:
             for f in extracted_path.rglob(f"*{ext}"):
                 try:
                     content = f.read_text(errors='ignore')
@@ -433,6 +453,48 @@ class BinaryProtectionAnalyzer(BaseAnalyzer):
                             "vendor": sdk_info["vendor"],
                             "features": sdk_info["features"],
                         }
+
+        # --- 2. Check for embedded framework bundles (iOS) ---
+        framework_names = {
+            "TalsecRuntime.framework": ("freerasp", RASP_SIGNATURES["freerasp"]),
+            "PromonShield.framework": ("promon_shield", RASP_SIGNATURES["promon_shield"]),
+            "DexGuard": ("guardsquare_dexguard", RASP_SIGNATURES["guardsquare_dexguard"]),
+            "iXGuard.framework": ("guardsquare_ixguard", RASP_SIGNATURES["guardsquare_ixguard"]),
+        }
+        for fw_dir in extracted_path.rglob("Frameworks"):
+            if fw_dir.is_dir():
+                for child in fw_dir.iterdir():
+                    for fw_name, (sdk_name, sdk_info) in framework_names.items():
+                        if child.name == fw_name:
+                            return {
+                                "sdk": sdk_name,
+                                "vendor": sdk_info["vendor"],
+                                "features": sdk_info["features"],
+                            }
+
+        # --- 3. Check Mach-O load commands for framework references ---
+        for f in extracted_path.rglob("*"):
+            if not f.is_file() or f.suffix or f.stat().st_size < 10000:
+                continue
+            try:
+                with open(f, "rb") as bf:
+                    magic = bf.read(4)
+                    if magic not in [b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                                     b'\xca\xfe\xba\xbe', b'\xcf\xfa\xed\xfe']:
+                        continue
+                    # Read first 64KB of the binary for load command strings
+                    bf.seek(0)
+                    header_bytes = bf.read(65536)
+                    header_text = header_bytes.decode("ascii", errors="ignore")
+                    for compiled_re, sdk_name, sdk_info in rasp_checks:
+                        if compiled_re.search(header_text):
+                            return {
+                                "sdk": sdk_name,
+                                "vendor": sdk_info["vendor"],
+                                "features": sdk_info["features"],
+                            }
+            except Exception:
+                continue
 
         return None
 

@@ -327,7 +327,8 @@ async function uploadApp() {
     showUploadDialog.value = false
     selectedFile.value = null
   } catch (e) {
-    toast.add({ severity: 'error', summary: 'Error', detail: 'Failed to upload app', life: 3000 })
+    const detail = appsStore.error || 'Failed to upload app'
+    toast.add({ severity: 'error', summary: 'Error', detail, life: 5000 })
   } finally {
     uploading.value = false
   }
