@@ -217,9 +217,21 @@ class ReactNativeAnalyzer(BaseAnalyzer):
                     poc_evidence=f"Potential {secret_type} found in JS bundle",
                     poc_verification=f"1. Extract {'APK' if app.platform == 'android' else 'IPA'}\n2. Locate {bundle_file}\n3. Search for credentials",
                     poc_commands=[
-                        f"unzip {app.file_path} -d /tmp/extracted",
-                        f"grep -n '{pattern[:20]}' /tmp/extracted/{bundle_file}",
-                        f"strings /tmp/extracted/{bundle_file} | grep -i 'api\\|key\\|secret\\|token'",
+                        {
+                            "type": "bash",
+                            "command": f"unzip {app.file_path} -d /tmp/extracted",
+                            "description": "Extract app archive",
+                        },
+                        {
+                            "type": "bash",
+                            "command": f"grep -n '{pattern[:20]}' /tmp/extracted/{bundle_file}",
+                            "description": f"Locate {secret_type} pattern in JS bundle",
+                        },
+                        {
+                            "type": "bash",
+                            "command": f"strings /tmp/extracted/{bundle_file} | grep -i 'api\\|key\\|secret\\|token'",
+                            "description": "Extract printable strings to surface other credentials",
+                        },
                     ],
                     cwe_id="CWE-798",
                     owasp_masvs_category="MASVS-STORAGE",
@@ -263,8 +275,16 @@ class ReactNativeAnalyzer(BaseAnalyzer):
                     poc_evidence=f"Insecure pattern '{name}' found",
                     poc_verification=f"1. Extract JS bundle\n2. Search for the insecure pattern",
                     poc_commands=[
-                        f"unzip {app.file_path} -d /tmp/extracted",
-                        f"grep -n '{name}' /tmp/extracted/{bundle_file}",
+                        {
+                            "type": "bash",
+                            "command": f"unzip {app.file_path} -d /tmp/extracted",
+                            "description": "Extract app archive",
+                        },
+                        {
+                            "type": "bash",
+                            "command": f"grep -n '{name}' /tmp/extracted/{bundle_file}",
+                            "description": f"Locate {title.lower()} occurrences",
+                        },
                     ],
                     cwe_id=cwe,
                     owasp_masvs_category="MASVS-CODE",
@@ -298,8 +318,16 @@ class ReactNativeAnalyzer(BaseAnalyzer):
                 poc_evidence=f"Found debug indicators: {', '.join(found_indicators)}",
                 poc_verification="1. Extract JS bundle\n2. Search for __DEV__, debugger, or debug tools",
                 poc_commands=[
-                    f"unzip {app.file_path} -d /tmp/extracted",
-                    f"grep -n '__DEV__\\|debugger' /tmp/extracted/{bundle_file}",
+                    {
+                        "type": "bash",
+                        "command": f"unzip {app.file_path} -d /tmp/extracted",
+                        "description": "Extract app archive",
+                    },
+                    {
+                        "type": "bash",
+                        "command": f"grep -n '__DEV__\\|debugger' /tmp/extracted/{bundle_file}",
+                        "description": "Locate debug indicators in JS bundle",
+                    },
                 ],
                 owasp_masvs_category="MASVS-RESILIENCE",
             ))
@@ -339,8 +367,16 @@ class ReactNativeAnalyzer(BaseAnalyzer):
                 poc_evidence=f"Found {len(api_urls)} API endpoints",
                 poc_verification="1. Extract JS bundle\n2. Search for API URLs\n3. Test each endpoint for authentication",
                 poc_commands=[
-                    f"unzip {app.file_path} -d /tmp/extracted",
-                    f"grep -oE 'https?://[^\"]+' /tmp/extracted/{bundle_file} | sort -u",
+                    {
+                        "type": "bash",
+                        "command": f"unzip {app.file_path} -d /tmp/extracted",
+                        "description": "Extract app archive",
+                    },
+                    {
+                        "type": "bash",
+                        "command": f"grep -oE 'https?://[^\"]+' /tmp/extracted/{bundle_file} | sort -u",
+                        "description": "Extract unique URLs from JS bundle",
+                    },
                 ],
                 owasp_masvs_category="MASVS-NETWORK",
             ))
@@ -371,8 +407,16 @@ class ReactNativeAnalyzer(BaseAnalyzer):
                         poc_evidence="No libhermes.so found - using plain JS bundle",
                         poc_verification="1. Unzip APK\n2. Check for libhermes.so\n3. Check if bundle starts with Hermes magic bytes",
                         poc_commands=[
-                            f"unzip -l {app.file_path} | grep hermes",
-                            "xxd -l 8 /tmp/extracted/assets/index.android.bundle",
+                            {
+                                "type": "bash",
+                                "command": f"unzip -l {app.file_path} | grep hermes",
+                                "description": "Check APK contents for libhermes.so",
+                            },
+                            {
+                                "type": "bash",
+                                "command": "xxd -l 8 /tmp/extracted/assets/index.android.bundle",
+                                "description": "Inspect bundle header for Hermes magic bytes",
+                            },
                         ],
                         owasp_masvs_category="MASVS-RESILIENCE",
                     ))

@@ -5,7 +5,27 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_command_list(v: Any) -> Any:
+    """Normalize poc_commands / remediation_commands: wrap strings, drop Nones.
+
+    Why: some analyzers emit strings instead of {type, command, description} dicts,
+    or leave None entries from conditional list comprehensions. Coerce here so
+    legacy DB rows and future regressions don't break the API.
+    """
+    if not isinstance(v, list):
+        return v
+    out = []
+    for item in v:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            out.append({"type": "bash", "command": item, "description": ""})
+        else:
+            out.append(item)
+    return out
 
 
 # ============================================================================
@@ -168,6 +188,10 @@ class FindingCreate(FindingBase):
     canonical_id: str | None = None
     tool_sources: list[str] = []
 
+    _normalize_commands = field_validator(
+        "poc_commands", "remediation_commands", mode="before"
+    )(_coerce_command_list)
+
 
 class FindingResponse(FindingBase):
     """Schema for finding response."""
@@ -215,6 +239,10 @@ class FindingResponse(FindingBase):
     first_seen: datetime
     last_seen: datetime
     created_at: datetime
+
+    _normalize_commands = field_validator(
+        "poc_commands", "remediation_commands", mode="before"
+    )(_coerce_command_list)
 
     class Config:
         from_attributes = True

@@ -219,9 +219,21 @@ class ResourceAnalyzer(BaseAnalyzer):
                                         f"3. Examine contents: cat extracted/{name}"
                                     ),
                                     poc_commands=[
-                                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                                        f"ls -la /tmp/extracted/{name}",
-                                        f"file /tmp/extracted/{name}",
+                                        {
+                                            "type": "bash",
+                                            "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                                            "description": "Extract APK contents",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"ls -la /tmp/extracted/{name}",
+                                            "description": f"Show metadata for {name}",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"file /tmp/extracted/{name}",
+                                            "description": "Identify file type",
+                                        },
                                     ],
                                     cwe_id="CWE-312",
                                     cwe_name="Cleartext Storage of Sensitive Information",
@@ -325,9 +337,21 @@ class ResourceAnalyzer(BaseAnalyzer):
                                         f"3. Verify at line {line_num}"
                                     ),
                                     poc_commands=[
-                                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                                        f"cat /tmp/extracted/{name}",
-                                        f"grep -n -E '{pattern[:50]}' /tmp/extracted/{name}",
+                                        {
+                                            "type": "bash",
+                                            "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                                            "description": "Extract APK contents",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"cat /tmp/extracted/{name}",
+                                            "description": f"Show full contents of {name}",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"grep -n -E '{pattern[:50]}' /tmp/extracted/{name}",
+                                            "description": f"Locate {secret_type.replace('_', ' ')} pattern in file",
+                                        },
                                     ],
                                     cwe_id="CWE-798",
                                     cwe_name="Use of Hard-coded Credentials",
@@ -421,8 +445,16 @@ class ResourceAnalyzer(BaseAnalyzer):
                                             f"3. Or use: aapt dump resources app.apk | grep {string_name}"
                                         ),
                                         poc_commands=[
-                                            f"apktool d {app.file_path} -o /tmp/decoded",
-                                            f"grep -r '{string_name}' /tmp/decoded/res/values/",
+                                            {
+                                                "type": "bash",
+                                                "command": f"apktool d {app.file_path} -o /tmp/decoded",
+                                                "description": "Decode APK with apktool",
+                                            },
+                                            {
+                                                "type": "bash",
+                                                "command": f"grep -r '{string_name}' /tmp/decoded/res/values/",
+                                                "description": f"Locate string resource '{string_name}'",
+                                            },
                                         ],
                                         cwe_id="CWE-798",
                                         cwe_name="Use of Hard-coded Credentials",
@@ -484,8 +516,16 @@ class ResourceAnalyzer(BaseAnalyzer):
                                         f"2. View cert: openssl x509 -in extracted/{name} -text"
                                     ),
                                     poc_commands=[
-                                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                                        f"openssl x509 -in /tmp/extracted/{name} -text -noout",
+                                        {
+                                            "type": "bash",
+                                            "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                                            "description": "Extract APK contents",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"openssl x509 -in /tmp/extracted/{name} -text -noout",
+                                            "description": "Parse and display certificate details",
+                                        },
                                     ],
                                     owasp_masvs_category="MASVS-NETWORK",
                                     owasp_masvs_control="MSTG-NETWORK-4",
@@ -526,8 +566,16 @@ class ResourceAnalyzer(BaseAnalyzer):
                                     code_snippet=json.dumps(data, indent=2)[:500],
                                     poc_evidence=f"Firebase config found in {name}",
                                     poc_commands=[
-                                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                                        f"cat /tmp/extracted/{name} | python -m json.tool",
+                                        {
+                                            "type": "bash",
+                                            "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                                            "description": "Extract APK contents",
+                                        },
+                                        {
+                                            "type": "bash",
+                                            "command": f"cat /tmp/extracted/{name} | python -m json.tool",
+                                            "description": "Pretty-print Firebase config JSON",
+                                        },
                                     ],
                                     owasp_masvs_category="MASVS-STORAGE",
                                     owasp_masvs_control="MSTG-STORAGE-12",

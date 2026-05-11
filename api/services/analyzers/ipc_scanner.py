@@ -575,8 +575,18 @@ class IPCScanner(BaseAnalyzer):
                 owasp_masvs_category="MASVS-PLATFORM",
                 owasp_masvs_control="MSTG-PLATFORM-1",
                 poc_commands=[
-                    f"adb shell am start -n {app.package_name}/{comps[0].name}" if comp_type == "activity" else None,
-                    f"adb shell content query --uri content://{app.package_name}" if comp_type == "provider" else None,
+                    cmd for cmd in [
+                        {
+                            "type": "adb",
+                            "command": f"adb shell am start -n {app.package_name}/{comps[0].name}",
+                            "description": f"Start exported activity {comps[0].name}",
+                        } if comp_type == "activity" else None,
+                        {
+                            "type": "adb",
+                            "command": f"adb shell content query --uri content://{app.package_name}",
+                            "description": "Query exported content provider",
+                        } if comp_type == "provider" else None,
+                    ] if cmd is not None
                 ],
                 metadata={
                     "component_type": comp_type,
@@ -676,8 +686,12 @@ class IPCScanner(BaseAnalyzer):
             owasp_masvs_control="MSTG-PLATFORM-3",
             poc_verification="1. Test URL schemes with adb/xcrun\n2. Check parameter handling\n3. Verify authentication requirements",
             poc_commands=[
-                f"adb shell am start -a android.intent.action.VIEW -d '{all_schemes[0]}://test'" if all_schemes else None,
-            ],
+                {
+                    "type": "adb",
+                    "command": f"adb shell am start -a android.intent.action.VIEW -d '{all_schemes[0]}://test'",
+                    "description": "Trigger first registered URL scheme via Android intent",
+                }
+            ] if all_schemes else [],
             metadata={
                 "schemes": list(set(all_schemes)),
             }

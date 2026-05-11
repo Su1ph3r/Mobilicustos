@@ -555,8 +555,16 @@ class EntitlementsAnalyzer(BaseAnalyzer):
                     f"3. Or: codesign -d --entitlements - extracted/Payload/*.app"
                 ),
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision 2>/dev/null | grep -A2 '{}'".format(entitlement_key),
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision 2>/dev/null | grep -A2 '{}'".format(entitlement_key),
+                        "description": f"Inspect '{entitlement_key}' in provisioning profile",
+                    },
                 ],
                 cwe_id=config.get("cwe_id"),
                 cwe_name=config.get("cwe_name"),
@@ -608,8 +616,16 @@ class EntitlementsAnalyzer(BaseAnalyzer):
                     ),
                     poc_evidence=f"Data protection level set to: {protection_level}",
                     poc_commands=[
-                        f"unzip -o {app.file_path} -d /tmp/extracted",
-                        f"security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision 2>/dev/null | grep -A2 'default-data-protection'",
+                        {
+                            "type": "bash",
+                            "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                            "description": "Extract IPA contents",
+                        },
+                        {
+                            "type": "bash",
+                            "command": "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision 2>/dev/null | grep -A2 'default-data-protection'",
+                            "description": "Inspect data protection level in provisioning profile",
+                        },
                     ],
                     cwe_id="CWE-311",
                     cwe_name="Missing Encryption of Sensitive Data",

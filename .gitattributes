@@ -1,0 +1,5 @@
+# Force LF line endings for files that run inside Linux containers,
+# so they keep working when checked out on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-entrypoint.sh text eol=lf

@@ -11,7 +11,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - "127.0.0.1:5432:5432"
+      # Host-side port. Defaults to 5432; override via POSTGRES_HOST_PORT when
+      # the host has 5432 reserved (e.g. Windows Hyper-V dynamic port exclusion).
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mobilicustos}"]
       interval: 10s
@@ -86,6 +88,14 @@ services:
       # Docker socket: Use DOCKER_SOCKET_PATH env var for Windows compatibility
       # Windows: set DOCKER_SOCKET_PATH=//var/run/docker.sock or //./pipe/docker_engine
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      # USB device passthrough for iOS device support (libimobiledevice + usbmuxd).
+      # Requires usbipd-win on the host with the iPhone attached to the docker-desktop
+      # WSL distro (or similar). On Mac, mount /var/run/usbmuxd instead.
+      - /dev/bus/usb:/dev/bus/usb
+    # privileged is required for usbmuxd to claim USB device interfaces.
+    # Tighter alternatives (cap_add SYS_ADMIN + device cgroup rules) are fragile
+    # across Docker Desktop versions; privileged is the documented pattern.
+    privileged: true
     ports:
       - "8000:8000"
     depends_on:

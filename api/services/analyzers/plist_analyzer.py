@@ -153,9 +153,21 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence="NSAllowsArbitraryLoads is set to true in Info.plist",
                 poc_verification="1. Unzip IPA: unzip app.ipa -d extracted\n2. Open Info.plist: plutil -p extracted/Payload/*.app/Info.plist\n3. Find NSAppTransportSecurity section\n4. Verify NSAllowsArbitraryLoads is true",
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A5 NSAppTransportSecurity",
-                    "plutil -extract NSAppTransportSecurity xml1 -o - /tmp/extracted/Payload/*.app/Info.plist",
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A5 NSAppTransportSecurity",
+                        "description": "Print NSAppTransportSecurity section of Info.plist",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "plutil -extract NSAppTransportSecurity xml1 -o - /tmp/extracted/Payload/*.app/Info.plist",
+                        "description": "Extract ATS configuration as XML",
+                    },
                 ],
                 cwe_id="CWE-319",
                 owasp_masvs_category="MASVS-NETWORK",
@@ -189,8 +201,16 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence=f"ATS exceptions found for: {', '.join(insecure_domains)}",
                 poc_verification="1. Extract IPA\n2. Check Info.plist NSExceptionDomains\n3. Verify each domain truly requires HTTP",
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A20 NSExceptionDomains",
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A20 NSExceptionDomains",
+                        "description": "Print NSExceptionDomains from Info.plist",
+                    },
                 ],
                 owasp_masvs_category="MASVS-NETWORK",
             ))
@@ -235,9 +255,21 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence=f"URL schemes registered: {', '.join(schemes)}",
                 poc_verification="1. Extract IPA and check Info.plist\n2. Test each scheme with: safari open <scheme>://test\n3. Check if app handles malformed URLs safely",
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A10 CFBundleURLTypes",
-                    f"# Test with: xcrun simctl openurl booted '{schemes[0]}://test'",
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -A10 CFBundleURLTypes",
+                        "description": "List registered URL schemes from Info.plist",
+                    },
+                    {
+                        "type": "bash",
+                        "command": f"xcrun simctl openurl booted '{schemes[0]}://test'",
+                        "description": "Trigger first registered scheme on booted simulator",
+                    },
                 ],
                 owasp_masvs_category="MASVS-PLATFORM",
             ))
@@ -283,8 +315,16 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence=f"App requests {len(requested_perms)} sensitive permission(s)",
                 poc_verification="1. Install app on device\n2. Navigate to Settings > Privacy\n3. Verify app appears under each requested permission category\n4. Test app behavior when permissions are denied",
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -i usage",
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "plutil -p /tmp/extracted/Payload/*.app/Info.plist | grep -i usage",
+                        "description": "List sensitive permission usage descriptions",
+                    },
                 ],
                 owasp_masvs_category="MASVS-PRIVACY",
             ))
@@ -314,9 +354,21 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence="get-task-allow entitlement is enabled",
                 poc_verification="1. Extract IPA\n2. Check embedded.mobileprovision\n3. Verify get-task-allow value",
                 poc_commands=[
-                    f"unzip -o {app.file_path} -d /tmp/extracted",
-                    "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision | grep -A2 get-task-allow",
-                    "# Attach debugger: lldb -n <process_name>",
+                    {
+                        "type": "bash",
+                        "command": f"unzip -o {app.file_path} -d /tmp/extracted",
+                        "description": "Extract IPA contents",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision | grep -A2 get-task-allow",
+                        "description": "Inspect get-task-allow entitlement",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "lldb -n <process_name>",
+                        "description": "Attach LLDB debugger to running process",
+                    },
                 ],
                 owasp_masvs_category="MASVS-RESILIENCE",
             ))
@@ -340,8 +392,16 @@ class PlistAnalyzer(BaseAnalyzer):
                 poc_evidence=f"Keychain access groups: {', '.join(keychain_groups)}",
                 poc_verification="1. Install app\n2. Use Keychain-Dumper on jailbroken device\n3. Check for shared keychain items",
                 poc_commands=[
-                    "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision | grep -A10 keychain-access-groups",
-                    "# On jailbroken device: keychain-dumper",
+                    {
+                        "type": "bash",
+                        "command": "security cms -D -i /tmp/extracted/Payload/*.app/embedded.mobileprovision | grep -A10 keychain-access-groups",
+                        "description": "List keychain access groups in provisioning profile",
+                    },
+                    {
+                        "type": "bash",
+                        "command": "keychain-dumper",
+                        "description": "Dump keychain entries on a jailbroken device",
+                    },
                 ],
                 owasp_masvs_category="MASVS-STORAGE",
             ))

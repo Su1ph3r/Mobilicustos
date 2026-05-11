@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     xz-utils \
     default-jdk-headless \
+    libimobiledevice-utils \
+    usbmuxd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install apktool for APK decompilation/repackaging
@@ -50,6 +52,10 @@ RUN mkdir -p /app/tools && \
 # Copy API code
 COPY api/ /app/api/
 
+# Install entrypoint that starts usbmuxd (for iOS USB) before uvicorn
+COPY api/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Create directories
 RUN mkdir -p /app/uploads /app/reports /app/frida-scripts
 
@@ -58,4 +64,5 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

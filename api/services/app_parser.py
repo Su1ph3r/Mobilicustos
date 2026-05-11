@@ -5,7 +5,7 @@ import logging
 import plistlib
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -112,10 +112,19 @@ async def parse_ios_app(file_path: Path) -> dict[str, Any]:
 
     try:
         with zipfile.ZipFile(file_path, "r") as ipa:
-            # Find Info.plist
+            # Find the app's main Info.plist at Payload/<X>.app/Info.plist.
+            # IPAs contain many Info.plist files (frameworks, storyboards, resource
+            # bundles); only the one directly inside the .app bundle has the app's
+            # CFBundleIdentifier and other top-level metadata.
             info_plist_path = None
             for name in ipa.namelist():
-                if name.endswith("Info.plist") and "Payload/" in name:
+                parts = PurePosixPath(name).parts
+                if (
+                    len(parts) == 3
+                    and parts[0] == "Payload"
+                    and parts[1].endswith(".app")
+                    and parts[2] == "Info.plist"
+                ):
                     info_plist_path = name
                     break
 
